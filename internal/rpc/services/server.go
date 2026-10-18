@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -501,7 +500,7 @@ func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	if err := validateBindSources(ctx, s.authManager, s.config.Storage.DataDir, msg.DockerOverrides.GetVolumes()); err != nil {
+	if err := validateDockerOverrides(ctx, s.authManager, s.config.Storage.DataDir, msg.DockerOverrides, nil); err != nil {
 		return nil, err
 	}
 
@@ -752,14 +751,7 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 
 	// Handle docker overrides update
 	if msg.DockerOverrides != nil {
-		// Check that labels do not start with "discopanel."
-		for key := range msg.DockerOverrides.Labels {
-			if strings.HasPrefix(key, "discopanel.") {
-				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("docker label keys cannot start with 'discopanel.', namespace reserved for internal management"))
-			}
-		}
-
-		if err := validateBindSources(ctx, s.authManager, s.config.Storage.DataDir, msg.DockerOverrides.GetVolumes()); err != nil {
+		if err := validateDockerOverrides(ctx, s.authManager, s.config.Storage.DataDir, msg.DockerOverrides, server.DockerOverrides); err != nil {
 			return nil, err
 		}
 
