@@ -698,9 +698,11 @@ func (m *Manager) stop(ctx context.Context, serverID string) error {
 	m.resetIdle(server.Id)
 
 	if m.bus != nil {
+		// Reason lets modules tell an idle stop from a manual one
 		m.bus.Emit(ctx, events.Event{
 			Type:     v1.TriggeredEventType_TRIGGERED_EVENT_TYPE_SERVER_STOP,
 			ServerId: server.Id,
+			Data:     stopEventData(ctx),
 		})
 	}
 
@@ -713,7 +715,7 @@ func (m *Manager) Restart(ctx context.Context, serverID string) error {
 }
 
 func (m *Manager) restart(ctx context.Context, serverID string) error {
-	if err := m.stop(ctx, serverID); err != nil {
+	if err := m.stop(context.WithValue(ctx, restartKey{}, true), serverID); err != nil {
 		return err
 	}
 	// Yields when another actor claimed the server mid restart
@@ -817,6 +819,26 @@ func (m *Manager) wake(ctx context.Context, serverID string) error {
 	m.rec.Announce(ctx, server.Id, v1.ServerActionKind_SERVER_ACTION_KIND_SERVER_WAKE, nil, "woke the server")
 	m.log.Info("lifecycle: woke server %s", server.Name)
 	return nil
+}
+
+// Marks the stop half of a restart
+type restartKey struct{}
+
+// Stop event data. Sources can be panel usernames and events reach
+// webhooks, so only a coarse reason leaves the lifecycle.
+func stopEventData(ctx context.Context) map[string]string {
+	reason := events.StopReasonManual
+	switch source := metrics.SourceFrom(ctx); {
+	case ctx.Value(restartKey{}) != nil:
+		reason = events.StopReasonRestart
+	case source == metrics.SourceAutostop:
+		reason = events.StopReasonAutostop
+	case source == metrics.SourceScheduler:
+		reason = events.StopReasonScheduled
+	case source == metrics.SourceSystem:
+		reason = events.StopReasonSystem
+	}
+	return map[string]string{events.DataStopReason: reason}
 }
 
 func (m *Manager) setStopIntent(serverID, source string) {

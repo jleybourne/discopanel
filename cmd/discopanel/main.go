@@ -519,7 +519,7 @@ func main() {
 		}
 		stopWG.Go(func() {
 			log.Info("Stopping managed server: %s", server.Name)
-			stopCtx, stopCancel := context.WithTimeout(metrics.WithTrace(metrics.WithSource(ctx, "system")), 90*time.Second)
+			stopCtx, stopCancel := context.WithTimeout(metrics.WithTrace(metrics.WithSource(ctx, metrics.SourceSystem)), 90*time.Second)
 			defer stopCancel()
 			if err := lifecycleManager.Stop(stopCtx, server.Id); err != nil {
 				log.Error("Failed to stop server %s: %v", server.Name, err)
@@ -527,6 +527,11 @@ func main() {
 		})
 	}
 	stopWG.Wait()
+
+	// Gateways kept up for Bedrock wake have no server stop to follow
+	modCtx, modCancel := context.WithTimeout(ctx, 60*time.Second)
+	moduleManager.StopModulesOfStoppedServers(modCtx)
+	modCancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Error("Server forced to shutdown: %v", err)

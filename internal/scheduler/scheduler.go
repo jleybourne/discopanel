@@ -353,7 +353,7 @@ func (s *Scheduler) executeTask(task *v1.ScheduledTask, trigger v1.TaskTrigger, 
 	if timeout == 0 {
 		timeout = 5 * time.Minute // Default timeout
 	}
-	execCtx, cancel := context.WithTimeout(metrics.WithTrace(metrics.WithSource(ctx, "scheduler")), timeout)
+	execCtx, cancel := context.WithTimeout(metrics.WithTrace(metrics.WithSource(ctx, metrics.SourceScheduler)), timeout)
 
 	// Track running execution
 	s.executionMu.Lock()

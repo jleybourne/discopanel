@@ -121,6 +121,8 @@ func normalizeAdditionalPorts(ports []*v1.NetworkPort, serverHostnames []string,
 			ProxyEnabled:  p.ProxyEnabled,
 			Hostnames:     hostnames,
 			CatchAll:      p.CatchAll,
+			// Only relayed udp can carry RakNet joins
+			Bedrock: p.Bedrock && protocol == v1.ModuleProtocol_MODULE_PROTOCOL_UDP,
 		}
 		if err := proxy.ValidatePortRouting(normalized, serverHostnames); err != nil {
 			return nil, err

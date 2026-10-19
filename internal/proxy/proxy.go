@@ -46,6 +46,10 @@ type Route struct {
 	McVersion string
 	// Protocol number for the version, zero when unknown
 	McProtocol int32
+	// Server a udp relay wakes on a bedrock join, empty when off
+	WakeServerID string
+	// Relay answers bedrock pings itself while the server is paused
+	Sleeping bool
 }
 
 // Dial address for the route's backend
@@ -78,13 +82,14 @@ type Config struct {
 	ListenAddr           string // Host and port to listen on
 	Logger               *logger.Logger
 	Gate                 ServerGate
-	Certs                *certIndex    // File loaded termination material
-	TrustedEdge          bool          // Keeps forwarded headers from an upstream edge
-	IngressProxyProtocol bool          // Parses PROXY protocol v1/v2 on incoming connections
-	TrustedProxies       []string      // CIDR whitelist for PROXY protocol upstream addresses
-	Intents              *IntentTable  // Shared reroute claims across sockets
-	Hub                  *HubRuntime   // Panel hosted lobby shared across sockets
-	Observer             *EdgeObserver // Traffic shape counters diagnostics read
+	Certs                *certIndex                               // File loaded termination material
+	TrustedEdge          bool                                     // Keeps forwarded headers from an upstream edge
+	IngressProxyProtocol bool                                     // Parses PROXY protocol v1/v2 on incoming connections
+	TrustedProxies       []string                                 // CIDR whitelist for PROXY protocol upstream addresses
+	Intents              *IntentTable                             // Shared reroute claims across sockets
+	Hub                  *HubRuntime                              // Panel hosted lobby shared across sockets
+	Observer             *EdgeObserver                            // Traffic shape counters diagnostics read
+	Wake                 func(serverID string, stats *RouteStats) // Udp relays ask for a bedrock wake, must not block
 }
 
 const (
