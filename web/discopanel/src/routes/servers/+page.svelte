@@ -34,6 +34,7 @@
 		statusMeta
 	} from '$lib/server-status';
 	import { loaderDisplayName } from '$lib/stores/loaders';
+	import { isHytale } from '$lib/game';
 	import { formatUptime } from '$lib/utils/time';
 	import { runServerAction, type ServerOp } from '$lib/server-actions';
 	import { notify } from '$lib/stores/activity.svelte';
@@ -72,7 +73,9 @@
 		{ key: 'issues', label: 'Issues' }
 	] as const;
 
-	let servers = $derived($serversStore);
+	// Hytale servers live in their own section
+	let servers = $derived($serversStore.filter((s) => !isHytale(s)));
+	let hytaleCount = $derived($serversStore.length - servers.length);
 	let searchQuery = $state('');
 	let filter = $state<'all' | 'active' | 'stopped' | 'issues'>('all');
 	let sortKey = $state<SortKey>('activity');
@@ -452,6 +455,11 @@
 					{visibleServers.length} of {servers.length}
 					{servers.length === 1 ? 'server' : 'servers'}
 				</p>
+			{/if}
+			{#if hytaleCount > 0}
+				<a href={resolve('/hytale')} class="block w-fit text-xs text-primary hover:underline">
+					{hytaleCount} Hytale {hytaleCount === 1 ? 'server' : 'servers'} →
+				</a>
 			{/if}
 		</div>
 	</div>

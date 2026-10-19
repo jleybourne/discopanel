@@ -20,6 +20,7 @@ import (
 	"github.com/discohaus/discopanel/internal/command"
 	storage "github.com/discohaus/discopanel/internal/db"
 	"github.com/discohaus/discopanel/internal/docker"
+	"github.com/discohaus/discopanel/internal/hytaletracker"
 	"github.com/discohaus/discopanel/internal/lifecycle"
 	"github.com/discohaus/discopanel/internal/metrics"
 	"github.com/discohaus/discopanel/internal/module"
@@ -29,6 +30,7 @@ import (
 	"github.com/discohaus/discopanel/pkg/config"
 	"github.com/discohaus/discopanel/pkg/events"
 	"github.com/discohaus/discopanel/pkg/files"
+	"github.com/discohaus/discopanel/pkg/hytale"
 	"github.com/discohaus/discopanel/pkg/indexers"
 	"github.com/discohaus/discopanel/pkg/logger"
 	"github.com/discohaus/discopanel/pkg/mcconsole"
@@ -75,6 +77,7 @@ type ServerService struct {
 	bus              *events.Bus
 	uploadManager    *transfer.UploadManager
 	completion       *command.Completion
+	hytale           *hytaletracker.Tracker
 
 	// Encoded server icons cached by file identity
 	favicons minecraft.FaviconCache
@@ -193,6 +196,11 @@ func NewServerService(store *storage.Store, docker *docker.Client, sender *comma
 }
 
 // Detaches request work from cancellation, values ride along
+// Wires the Hytale tracker after construction
+func (s *ServerService) SetHytaleTracker(t *hytaletracker.Tracker) {
+	s.hytale = t
+}
+
 func detach(ctx context.Context) context.Context {
 	return context.WithoutCancel(ctx)
 }
@@ -308,6 +316,7 @@ func (s *ServerService) ListServers(ctx context.Context, req *connect.Request[v1
 	for _, server := range servers {
 		// Icon comes from disk, cheap enough for light polls
 		server.Favicon = s.serverFavicon(server)
+		s.applyHytale(ctx, server)
 
 		// Stored status only unless the caller wants live stats
 		if server.ContainerId != "" && req.Msg.FullStats {
@@ -382,6 +391,7 @@ func (s *ServerService) GetServer(ctx context.Context, req *connect.Request[v1.G
 	// Apply cached metrics from the background collector
 	s.applyMetrics(server)
 	server.Favicon = s.serverFavicon(server)
+	s.applyHytale(ctx, server)
 
 	return connect.NewResponse(&v1.GetServerResponse{
 		Server: server.Redact(),
@@ -390,6 +400,11 @@ func (s *ServerService) GetServer(ctx context.Context, req *connect.Request[v1.G
 
 func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v1.CreateServerRequest]) (*connect.Response[v1.CreateServerResponse], error) {
 	msg := req.Msg
+
+	// Hytale servers share nothing Minecraft specific below
+	if minecraft.IsHytale(msg.ModLoader) {
+		return s.createHytaleServer(ctx, msg)
+	}
 
 	// Convert mod loader from proto
 	modLoader := msg.ModLoader
@@ -658,6 +673,10 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 	if err != nil {
 		return nil, err
 	}
+	if err := validateHytaleUpdate(server, msg); err != nil {
+		return nil, err
+	}
+	isHytale := minecraft.IsHytale(server.ModLoader)
 
 	// Check if container recreation is needed
 	needsRecreation := false
@@ -790,7 +809,9 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 	// Registry checkout guards the merged network state until persist
 	proxyOn := s.proxy.Enabled()
 	var netReqs []proxy.NetRequest
-	if len(server.ProxyHostnames) > 0 {
+	if isHytale {
+		netReqs = hytalePortRequests(int(server.Port), server.AdditionalPorts, proxyOn)
+	} else if len(server.ProxyHostnames) > 0 {
 		netReqs = proxy.PortNetRequests(server.AdditionalPorts, server.ProxyHostnames, proxyOn)
 		if listener, lerr := s.store.GetProxyListener(ctx, server.ProxyListenerId); lerr == nil && listener != nil {
 			netReqs = proxy.ServerProxiedNetRequests(server.ProxyHostnames, int(listener.Port), server.AdditionalPorts, proxyOn, server.ProxyCatchAll)
@@ -1085,6 +1106,17 @@ func (s *ServerService) DeleteServer(ctx context.Context, req *connect.Request[v
 	if s.logStreamer != nil {
 		s.logStreamer.RemoveStream(server.Id)
 	}
+	if s.hytale != nil {
+		s.hytale.Forget(server.Id)
+	}
+	// Downloader credentials and settings live outside the data dir
+	if minecraft.IsHytale(server.ModLoader) {
+		if dir, err := hytale.PrivateDir(s.config.Storage.DataDir, server.Id); err == nil {
+			if err := os.RemoveAll(dir); err != nil {
+				s.log.Warn("Failed to remove Hytale state for %s: %v", server.Name, err)
+			}
+		}
+	}
 
 	return connect.NewResponse(&v1.DeleteServerResponse{}), nil
 }
@@ -1257,6 +1289,10 @@ func (s *ServerService) SendCommand(ctx context.Context, req *connect.Request[v1
 
 // Predicts completions for a partially typed console command
 func (s *ServerService) GetCommandCompletions(ctx context.Context, req *connect.Request[v1.GetCommandCompletionsRequest]) (*connect.Response[v1.GetCommandCompletionsResponse], error) {
+	// Completion trees are built from Minecraft command data
+	if s.isHytale(ctx, req.Msg.Id) {
+		return connect.NewResponse(&v1.GetCommandCompletionsResponse{}), nil
+	}
 	tokens, err := s.completion.GetCompletion(ctx, req.Msg.Id, req.Msg.Command)
 	if err != nil {
 		s.log.Warn("Failed to get command completions for server %s: %v", req.Msg.Id, err)
@@ -1270,6 +1306,9 @@ func (s *ServerService) GetCommandCompletions(ctx context.Context, req *connect.
 
 // Reports whether the server's loader and version support completion
 func (s *ServerService) IsCommandCompletionAvailable(ctx context.Context, req *connect.Request[v1.IsCommandCompletionAvailableRequest]) (*connect.Response[v1.IsCommandCompletionAvailableResponse], error) {
+	if s.isHytale(ctx, req.Msg.Id) {
+		return connect.NewResponse(&v1.IsCommandCompletionAvailableResponse{}), nil
+	}
 	available, err := s.completion.IsAvailable(ctx, req.Msg.Id)
 	if err != nil {
 		s.log.Warn("Failed to check command completion availability for server %s: %v", req.Msg.Id, err)
@@ -1283,6 +1322,10 @@ func (s *ServerService) IsCommandCompletionAvailable(ctx context.Context, req *c
 
 // Broadcasts a chat line in game under the given sender
 func (s *ServerService) SendChat(ctx context.Context, req *connect.Request[v1.SendChatRequest]) (*connect.Response[v1.SendChatResponse], error) {
+	// Panel chat is a tellraw, a Minecraft command
+	if s.isHytale(ctx, req.Msg.Id) {
+		return nil, errHytaleUnsupported("chat from the panel")
+	}
 	err := s.sender.Chat(ctx, req.Msg.Id, req.Msg.Sender, req.Msg.Message)
 	switch {
 	case errors.Is(err, command.ErrEmptyMessage):
@@ -1432,6 +1475,42 @@ func (s *ServerService) GetNextAvailablePort(ctx context.Context, req *connect.R
 		Port:      int32(nextPort),
 		UsedPorts: usedPorts,
 	}), nil
+}
+
+// Reports whether a server row hosts Hytale
+func (s *ServerService) isHytale(ctx context.Context, serverID string) bool {
+	server, err := s.store.GetServer(ctx, serverID)
+	return err == nil && minecraft.IsHytale(server.ModLoader)
+}
+
+// Checks one port against every reservation the panel holds
+func (s *ServerService) CheckPortAvailable(ctx context.Context, req *connect.Request[v1.CheckPortAvailableRequest]) (*connect.Response[v1.CheckPortAvailableResponse], error) {
+	port := int(req.Msg.Port)
+	if port < 1 || port > 65535 {
+		return connect.NewResponse(&v1.CheckPortAvailableResponse{Reason: "port must be between 1 and 65535"}), nil
+	}
+	// Unspecified checks both transports, Hytale wants a number nobody uses
+	var reqs []proxy.NetRequest
+	switch req.Msg.Protocol {
+	case v1.ModuleProtocol_MODULE_PROTOCOL_UDP, v1.ModuleProtocol_MODULE_PROTOCOL_TCP:
+		reqs = []proxy.NetRequest{{Port: port, Protocol: req.Msg.Protocol}}
+	case v1.ModuleProtocol_MODULE_PROTOCOL_UNSPECIFIED:
+		reqs = []proxy.NetRequest{
+			{Port: port, Protocol: v1.ModuleProtocol_MODULE_PROTOCOL_TCP},
+			{Port: port, Protocol: v1.ModuleProtocol_MODULE_PROTOCOL_UDP},
+		}
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("protocol must be tcp, udp or unspecified"))
+	}
+	owner := proxy.NetOwner{Kind: proxy.OwnerServer, ID: req.Msg.ServerId}
+	if err := s.proxy.ValidateNetwork(ctx, owner, reqs); err != nil {
+		var conflict *proxy.NetConflictError
+		if errors.As(err, &conflict) {
+			return connect.NewResponse(&v1.CheckPortAvailableResponse{Reason: conflict.Reason}), nil
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&v1.CheckPortAvailableResponse{Available: true}), nil
 }
 
 // Reports host physical memory and per-server reservations

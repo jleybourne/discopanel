@@ -62,6 +62,7 @@
 	import ServerRouting from '$lib/components/server-routing.svelte';
 	import ServerTasks from '$lib/components/server-tasks.svelte';
 	import ServerModules from '$lib/components/server/ServerModules.svelte';
+	import { isHytale } from '$lib/game';
 
 	const DELETE_WARNING =
 		'This permanently stops and removes the container, deletes all server files and the world, and removes every mod and property.\nThis cannot be undone.';
@@ -199,6 +200,12 @@
 			const request = create(GetServerRequestSchema, { id: requestedId });
 			const callOptions = skipLoading ? silentCallOptions : undefined;
 			const response = await rpcClient.server.getServer(request, callOptions);
+			// Hytale servers have their own section
+			if (isHytale(response.server) && serverId === requestedId) {
+				// eslint-disable-next-line svelte/no-navigation-without-resolve -- base is resolved, only query varies
+				goto(resolve(`/hytale/${requestedId}`) + page.url.search, { replaceState: true });
+				return;
+			}
 			if (response.server && serverId === requestedId) {
 				server = response.server;
 				loadError = null;

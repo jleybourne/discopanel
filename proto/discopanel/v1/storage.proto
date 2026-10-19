@@ -414,6 +414,17 @@ enum ModLoader {
       pack_source: PACK_SOURCE_CURSEFORGE
     }
   ];
+  MOD_LOADER_HYTALE = 31 [
+    (discopanel.options.v1.value) = {
+      label: "Hytale"
+      desc: "Official Hytale dedicated server"
+    },
+    (discopanel.options.v1.loader) = {
+      category: MOD_LOADER_CATEGORY_OTHER
+      mods_directory: "mods"
+      game: GAME_HYTALE
+    }
+  ];
 }
 
 // Task type enumeration
@@ -1051,6 +1062,61 @@ message Server {
   optional google.protobuf.Timestamp modpack_update_file_date = 59;
   // Advertised version the operator chose to ignore
   string modpack_update_dismissed_id = 60;
+
+  // Hytale runtime facts, computed at read time, absent for Minecraft
+  HytaleState hytale = 61 [(protogorm.v1.db) = {skip: true}];
+}
+
+// Hytale account sign-in state as the panel last observed it
+enum HytaleAuthState {
+  option (discopanel.options.v1.enum_type) = {label: "Hytale Account"};
+  HYTALE_AUTH_STATE_UNSPECIFIED = 0 [(discopanel.options.v1.value) = {
+    label: "Unknown"
+    desc: "The panel has not seen the server report its sign-in state yet"
+  }];
+  HYTALE_AUTH_STATE_SIGNED_OUT = 1 [(discopanel.options.v1.value) = {
+    label: "Not signed in"
+    desc: "The server runs unauthenticated, players cannot join"
+  }];
+  HYTALE_AUTH_STATE_WAITING = 2 [(discopanel.options.v1.value) = {
+    label: "Waiting for sign-in"
+    desc: "A device code is waiting for approval"
+  }];
+  HYTALE_AUTH_STATE_SIGNED_IN = 3 [(discopanel.options.v1.value) = {
+    label: "Signed in"
+    desc: "The server is authenticated with a Hytale account"
+  }];
+}
+
+// One device code sign-in waiting for approval
+message HytaleSignIn {
+  // 1 is the downloader, 2 is the server itself
+  int32 step = 1;
+  // Verification page, carries the code when the tool printed one
+  string url = 2;
+  string code = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  // Url and code withheld, the viewer cannot run commands on this server
+  bool withheld = 5;
+}
+
+// Hytale facts shown on the server page
+message HytaleState {
+  // Release channel, "release" or "pre-release"
+  string patchline = 1;
+  // Server build the provisioner installed, empty before the first install
+  string installed_version = 2;
+  HytaleAuthState auth = 3;
+  // Server credentials persist encrypted across restarts
+  bool persistence_encrypted = 4;
+  // Downloader credentials are stored with the server
+  bool downloader_signed_in = 5;
+  // Pending device sign-in, absent when none
+  HytaleSignIn sign_in = 6;
+  // Player count comes from console lines, false means unknown
+  bool players_known = 7;
+  // MaxViewRadius from config.json, 0 when unknown
+  int32 max_view_radius = 8;
 }
 
 // TCP proxy listener endpoint

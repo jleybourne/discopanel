@@ -14,6 +14,7 @@ import (
 	storage "github.com/discohaus/discopanel/internal/db"
 	"github.com/discohaus/discopanel/internal/diagnostics"
 	"github.com/discohaus/discopanel/internal/docker"
+	"github.com/discohaus/discopanel/internal/hytaletracker"
 	"github.com/discohaus/discopanel/internal/lifecycle"
 	"github.com/discohaus/discopanel/internal/metrics"
 	"github.com/discohaus/discopanel/internal/module"
@@ -68,10 +69,11 @@ type Server struct {
 	wsHub            *ws.Hub
 	diagnostics      *diagnostics.Runner
 	telemetry        *telemetry.Sender
+	hytale           *hytaletracker.Tracker
 }
 
 // Creates new Connect RPC server
-func NewServer(store *storage.Store, docker *docker.Client, sender *command.Sender, cfg *config.Config, proxyManager *proxy.Manager, sched *scheduler.Scheduler, lifecycleManager *lifecycle.Manager, metricsCollector *metrics.Collector, moduleManager *module.Manager, bus *events.Bus, agentHub *metrics.Hub, prov *provisioner.Provisioner, rec *metrics.Recorder, log *logger.Logger) (*Server, error) {
+func NewServer(store *storage.Store, docker *docker.Client, sender *command.Sender, cfg *config.Config, proxyManager *proxy.Manager, sched *scheduler.Scheduler, lifecycleManager *lifecycle.Manager, metricsCollector *metrics.Collector, moduleManager *module.Manager, bus *events.Bus, agentHub *metrics.Hub, prov *provisioner.Provisioner, hytaleTracker *hytaletracker.Tracker, rec *metrics.Recorder, log *logger.Logger) (*Server, error) {
 	// RBAC init failure is fatal, authz must never silently vanish
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
@@ -96,6 +98,11 @@ func NewServer(store *storage.Store, docker *docker.Client, sender *command.Send
 	moduleManager.SetLogStreamer(logStreamer)
 	moduleManager.SetTokenMinter(authManager)
 	sender.SetJournal(rec, logStreamer)
+	// Hytale boot, sign-in and player lines come from the console stream
+	if hytaleTracker != nil {
+		logStreamer.SetLineObserver(hytaleTracker.Observe)
+		hytaleTracker.SetConsoleSink(logStreamer.AddSystemEntry)
+	}
 
 	// Initialize upload manager
 	uploadTTL := time.Duration(cfg.Upload.SessionTTL) * time.Minute
@@ -144,6 +151,7 @@ func NewServer(store *storage.Store, docker *docker.Client, sender *command.Send
 		wsHub:            wsHub,
 		diagnostics:      diag,
 		telemetry:        heartbeat,
+		hytale:           hytaleTracker,
 	}
 
 	s.setupHandler()
@@ -162,6 +170,7 @@ func (s *Server) setupHandler() {
 		discopanelv1connect.AuthServiceName,
 		discopanelv1connect.PropertiesServiceName,
 		discopanelv1connect.FileServiceName,
+		discopanelv1connect.HytaleServiceName,
 		discopanelv1connect.MinecraftServiceName,
 		discopanelv1connect.ModServiceName,
 		discopanelv1connect.ModpackServiceName,
@@ -253,6 +262,8 @@ func (s *Server) registerServices(mux *http.ServeMux, opts []connect.HandlerOpti
 	roleService := services.NewRoleService(s.store, s.enforcer, s.log)
 	moduleService := services.NewModuleService(s.store, s.docker, s.moduleManager, s.proxyManager, s.authManager, s.config, s.logStreamer, s.metricsCollector, s.rec, s.log)
 	uploadService := services.NewUploadService(s.uploadManager, s.config, s.log)
+	hytaleService := services.NewHytaleService(s.store, s.docker, s.lifecycle, s.hytale, s.uploadManager, s.enforcer, s.config.Storage.DataDir, s.rec, s.log)
+	serverService.SetHytaleTracker(s.hytale)
 
 	// Register service handlers
 	authPath, authHandler := discopanelv1connect.NewAuthServiceHandler(authService, opts...)
@@ -296,6 +307,9 @@ func (s *Server) registerServices(mux *http.ServeMux, opts []connect.HandlerOpti
 
 	uploadPath, uploadHandler := discopanelv1connect.NewUploadServiceHandler(uploadService, opts...)
 	mux.Handle(uploadPath, uploadHandler)
+
+	hytalePath, hytaleHandler := discopanelv1connect.NewHytaleServiceHandler(hytaleService, opts...)
+	mux.Handle(hytalePath, hytaleHandler)
 
 	// Agent auth is in-handler, unary interceptors skip bidi streams
 	agentService := services.NewAgentService(s.store, s.agentHub, s.log)

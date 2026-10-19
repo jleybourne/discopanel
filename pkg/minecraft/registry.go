@@ -45,6 +45,7 @@ func init() {
 				ModsDirectory:   meta.ModsDirectory,
 				SupportsMods:    meta.ModsDirectory != "",
 				SupportsPlugins: meta.ModsDirectory == "plugins",
+				Game:            gameOf(meta),
 			},
 			LoaderMeta: meta,
 		})
@@ -91,6 +92,27 @@ func LoaderFor(loader v1.ModLoader) LoaderInfo {
 		},
 		LoaderMeta: &optionsv1.LoaderMeta{},
 	}
+}
+
+// Unset game metadata means Minecraft: Java Edition
+func gameOf(meta *optionsv1.LoaderMeta) optionsv1.Game {
+	if meta.GetGame() == optionsv1.Game_GAME_UNSPECIFIED {
+		return optionsv1.Game_GAME_MINECRAFT_JAVA
+	}
+	return meta.GetGame()
+}
+
+// Game a loader hosts
+func GameOf(loader v1.ModLoader) optionsv1.Game {
+	if row, ok := loaderIndex[loader]; ok {
+		return row.Info.Game
+	}
+	return optionsv1.Game_GAME_MINECRAFT_JAVA
+}
+
+// Reports whether a loader hosts Hytale rather than Minecraft
+func IsHytale(loader v1.ModLoader) bool {
+	return GameOf(loader) == optionsv1.Game_GAME_HYTALE
 }
 
 // Pack source a loader installs from, unspecified when none

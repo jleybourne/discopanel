@@ -47,12 +47,17 @@
 		Settings,
 		FileText,
 		Loader2,
-		Moon
+		Moon,
+		Gamepad2
 	} from '@lucide/svelte';
 	import { type Server, ServerStatus } from '$lib/proto/discopanel/v1/storage_pb';
+	import { isHytale } from '$lib/game';
 	import type { GetProxyStatusResponse } from '$lib/proto/discopanel/v1/proxy_pb';
 
-	let servers = $derived($serversStore);
+	// Hytale servers live in their own section, host memory still counts them
+	let servers = $derived($serversStore.filter((s) => !isHytale(s)));
+	let allRunning = $derived($serversStore.filter((s) => s.status === ServerStatus.RUNNING));
+	let hytaleCount = $derived($serversStore.length - servers.length);
 	let user = $derived($currentUser);
 	let showSettingsLink = $derived($canAccessSettings);
 	let initialLoading = $state(true);
@@ -91,8 +96,8 @@
 			running: running.length,
 			players: running.reduce((acc, s) => acc + (s.playersOnline || 0), 0),
 			playerCapacity: running.reduce((acc, s) => acc + (s.maxPlayers || 0), 0),
-			usedMemoryMb: running.reduce((acc, s) => acc + Number(s.memoryUsage || s.memory || 0), 0),
-			totalMemoryMb: servers.reduce((acc, s) => acc + (s.memory || 0), 0),
+			usedMemoryMb: allRunning.reduce((acc, s) => acc + Number(s.memoryUsage || s.memory || 0), 0),
+			totalMemoryMb: $serversStore.reduce((acc, s) => acc + (s.memory || 0), 0),
 			avgTps: withTps.length
 				? withTps.reduce((acc, s) => acc + (s.tps || 0), 0) / withTps.length
 				: 0
@@ -116,8 +121,9 @@
 		return `Struggling to keep up, ${server.tps.toFixed(1)} TPS`;
 	}
 
+	// Crashed Hytale servers show here too, linked to their own section
 	let attention = $derived(
-		servers.filter(
+		$serversStore.filter(
 			(s) =>
 				s.status === ServerStatus.ERROR ||
 				s.status === ServerStatus.UNHEALTHY ||
@@ -228,13 +234,21 @@
 		<div class="rounded-xl border bg-card">
 			<EmptyState
 				icon={ServerIcon}
-				title="Welcome to DiscoPanel"
-				description="Spin up your first Minecraft server, or browse modpacks to find something fun."
+				title={hytaleCount > 0 ? 'No Minecraft servers yet' : 'Welcome to DiscoPanel'}
+				description={hytaleCount > 0
+					? `Your ${hytaleCount === 1 ? 'Hytale server lives' : `${hytaleCount} Hytale servers live`} in the Hytale section${attention.length > 0 ? `, ${attention.length} ${attention.length === 1 ? 'needs' : 'need'} attention` : ''}.`
+					: 'Spin up your first Minecraft server, or browse modpacks to find something fun.'}
 				class="py-20"
 			>
 				<div
 					class="flex w-full max-w-xs flex-col items-center justify-center gap-3 sm:max-w-none sm:flex-row"
 				>
+					{#if hytaleCount > 0}
+						<Button href={resolve('/hytale')} variant="outline" class="w-full sm:w-auto">
+							<Gamepad2 class="size-4" />
+							Hytale servers
+						</Button>
+					{/if}
 					<Button href={resolve('/servers/new')} class="glow-primary w-full sm:w-auto">
 						<Plus class="size-4" />
 						Create your first server
@@ -298,7 +312,9 @@
 							<div class="min-w-0 flex-1">
 								<div class="flex flex-wrap items-center gap-2">
 									<a
-										href={resolve(`/servers/${server.id}`)}
+										href={resolve(
+											isHytale(server) ? `/hytale/${server.id}` : `/servers/${server.id}`
+										)}
 										class="truncate text-sm font-medium after:absolute after:inset-0"
 									>
 										{server.name}
@@ -312,7 +328,9 @@
 									variant="outline"
 									size="sm"
 									class="h-7 gap-1.5 text-xs"
-									href="{resolve(`/servers/${server.id}`)}?tab=console"
+									href="{resolve(
+										isHytale(server) ? `/hytale/${server.id}` : `/servers/${server.id}`
+									)}?tab=console"
 								>
 									<Terminal class="size-3.5" />
 									Console

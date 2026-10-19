@@ -4,7 +4,8 @@
 	import { formatBytes } from '$lib/utils';
 	import { AlertTriangle } from '@lucide/svelte';
 
-	let { server }: { server: Server } = $props();
+	// TPS is measured by the Minecraft agent, other games hide the row
+	let { server, showTps = true }: { server: Server; showTps?: boolean } = $props();
 
 	let agentHeap = $derived(server.agentConnected && server.heapMaxMb > 0);
 	let memUsageMb = $derived(Number(server.memoryUsage));
@@ -154,7 +155,7 @@
 			</p>
 		</div>
 
-		<div>
+		<div class:hidden={!showTps}>
 			<div class="mb-1.5 flex items-baseline justify-between">
 				<span class="text-xs font-medium text-muted-foreground">TPS</span>
 				{#if server.agentConnected && server.tps > 0}

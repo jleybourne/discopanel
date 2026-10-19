@@ -12,6 +12,8 @@
 		disabled?: boolean;
 		label?: string;
 		dirty?: boolean;
+		// Smallest container size the game accepts
+		minMemory?: number;
 	}
 
 	let {
@@ -22,10 +24,11 @@
 		occupiedMb = 0,
 		disabled = false,
 		label = 'Memory',
-		dirty = false
+		dirty = false,
+		minMemory = 1024
 	}: Props = $props();
 
-	const MIN_CONTAINER = 1024;
+	let MIN_CONTAINER = $derived(minMemory);
 	const HEAP_FLOOR = 512;
 	const STEP = 256;
 	const CHIP_W = 56;

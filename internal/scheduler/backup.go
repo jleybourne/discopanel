@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/discohaus/discopanel/internal/metrics"
 	"github.com/discohaus/discopanel/pkg/files"
+	"github.com/discohaus/discopanel/pkg/hytale"
+	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 )
 
@@ -25,7 +28,7 @@ func (s *Scheduler) executeBackupTask(ctx context.Context, server *v1.Server, ta
 		return "", fmt.Errorf("server has no data directory")
 	}
 
-	paths, missing, err := resolveBackupPaths(server.DataPath, config.Paths)
+	paths, missing, err := resolveBackupPaths(server.DataPath, server.ModLoader, config.Paths)
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +81,7 @@ func (s *Scheduler) executeBackupTask(ctx context.Context, server *v1.Server, ta
 }
 
 // Validates requested paths, empty means the world directory
-func resolveBackupPaths(dataPath string, requested []string) (paths []string, missing []string, err error) {
+func resolveBackupPaths(dataPath string, loader v1.ModLoader, requested []string) (paths []string, missing []string, err error) {
 	cleaned := make([]string, 0, len(requested))
 	for _, p := range requested {
 		rel := filepath.Clean(strings.TrimSpace(p))
@@ -89,6 +92,15 @@ func resolveBackupPaths(dataPath string, requested []string) (paths []string, mi
 			return nil, nil, fmt.Errorf("invalid backup path %q: must be relative to the server directory", p)
 		}
 		cleaned = append(cleaned, rel)
+	}
+
+	if len(cleaned) == 0 && minecraft.IsHytale(loader) {
+		// Hytale default keeps worlds, mods and the access lists together
+		paths = hytale.BackupPaths(dataPath)
+		if !slices.Contains(paths, hytale.UniverseDir) {
+			return nil, nil, fmt.Errorf("no %s directory found to back up, start the server once first", hytale.UniverseDir)
+		}
+		return paths, nil, nil
 	}
 
 	if len(cleaned) == 0 {
@@ -123,6 +135,10 @@ func resolveBackupPaths(dataPath string, requested []string) (paths []string, mi
 // Pauses and flushes world saves, returns the resume function
 func (s *Scheduler) pauseWorldSaves(ctx context.Context, server *v1.Server) func() {
 	if server.Status != v1.ServerStatus_SERVER_STATUS_RUNNING || server.ContainerId == "" {
+		return func() {}
+	}
+	// save-off and save-all are Minecraft commands
+	if minecraft.IsHytale(server.ModLoader) {
 		return func() {}
 	}
 

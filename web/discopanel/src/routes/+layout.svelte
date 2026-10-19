@@ -34,7 +34,15 @@
 	import { systemModules } from '$lib/stores/system-modules.svelte';
 	import { watchModpackUpdates } from '$lib/stores/modpack-updates.svelte';
 	import { runPageRefreshers } from '$lib/stores/refresh';
-	import { authStore, currentUser, canAccessSettings, authEnabled } from '$lib/stores/auth';
+	import {
+		authStore,
+		currentUser,
+		canAccessSettings,
+		authEnabled,
+		checkPermission
+	} from '$lib/stores/auth';
+	import { ResourceType, ActionType } from '$lib/proto/discopanel/options/v1/options_pb';
+	import { isHytale } from '$lib/game';
 	import { onMount } from 'svelte';
 	import {
 		CommandPalette,
@@ -58,6 +66,7 @@
 		Sun,
 		Moon,
 		Puzzle,
+		Gamepad2,
 		Search,
 		ChevronRight,
 		RefreshCcw,
@@ -75,6 +84,9 @@
 	let servers = $derived($activitySortedServers);
 	let user = $derived($currentUser);
 	let showSettingsNav = $derived($canAccessSettings);
+	let showHytaleNav = $derived(
+		checkPermission($authStore.permissions, ResourceType.SERVERS, ActionType.READ)
+	);
 	let loading = $state(true);
 	let isAuthEnabled = $derived($authEnabled);
 	let paletteOpen = $state(false);
@@ -102,7 +114,7 @@
 	);
 
 	let currentServerName = $derived.by(() => {
-		const match = page.url.pathname.match(/^\/servers\/([^/]+)/);
+		const match = page.url.pathname.match(/^\/(?:servers|hytale)\/([^/]+)/);
 		if (!match || match[1] === 'new') return null;
 		return servers.find((s) => s.id === match[1])?.name ?? null;
 	});
@@ -110,6 +122,7 @@
 	type SectionUrl =
 		| '/'
 		| '/servers'
+		| '/hytale'
 		| '/modpacks'
 		| '/modules'
 		| '/settings'
@@ -125,6 +138,11 @@
 				return { section: 'Servers', detail: 'New server', sectionUrl: '/servers' };
 			if (path.startsWith('/servers/'))
 				return { section: 'Servers', detail: currentServerName, sectionUrl: '/servers' };
+			if (path === '/hytale') return { section: 'Hytale', detail: null, sectionUrl: '/hytale' };
+			if (path === '/hytale/new')
+				return { section: 'Hytale', detail: 'New server', sectionUrl: '/hytale' };
+			if (path.startsWith('/hytale/'))
+				return { section: 'Hytale', detail: currentServerName, sectionUrl: '/hytale' };
 			if (path.startsWith('/modpacks'))
 				return { section: 'Modpacks', detail: null, sectionUrl: '/modpacks' };
 			if (path.startsWith('/modules'))
@@ -328,6 +346,26 @@
 									{/snippet}
 								</SidebarMenuButton>
 							</SidebarMenuItem>
+							{#if showHytaleNav}
+								<SidebarMenuItem>
+									<SidebarMenuButton
+										isActive={page.url.pathname.startsWith('/hytale')}
+										tooltipContent="Hytale (early access)"
+									>
+										{#snippet child({ props })}
+											<a href={resolvePath('/hytale')} {...props}>
+												<Gamepad2 class="size-4" />
+												<span class="group-data-[collapsible=icon]:hidden">Hytale</span>
+												<span
+													class="ml-auto rounded-full border border-primary/25 bg-primary/10 px-1.5 py-px text-[10px] leading-4 font-medium text-primary group-data-[collapsible=icon]:hidden"
+												>
+													Early access
+												</span>
+											</a>
+										{/snippet}
+									</SidebarMenuButton>
+								</SidebarMenuItem>
+							{/if}
 							<SidebarMenuItem>
 								<SidebarMenuButton
 									isActive={page.url.pathname.startsWith('/modpacks')}
@@ -392,14 +430,21 @@
 						<SidebarGroupContent>
 							<SidebarMenu>
 								{#each servers as server (server.id)}
+									{@const hytale = isHytale(server)}
 									<SidebarMenuItem>
 										<SidebarMenuButton
-											isActive={page.url.pathname === `/servers/${server.id}`}
+											isActive={page.url.pathname ===
+												`/${hytale ? 'hytale' : 'servers'}/${server.id}`}
 											tooltipContent={server.name}
 											class="group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-1!"
 										>
 											{#snippet child({ props })}
-												<a href={resolvePath(`/servers/${server.id}`)} {...props}>
+												<a
+													href={resolvePath(
+														hytale ? `/hytale/${server.id}` : `/servers/${server.id}`
+													)}
+													{...props}
+												>
 													<ServerAvatar
 														name={server.name}
 														favicon={server.favicon}

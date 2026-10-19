@@ -60,4 +60,13 @@ message Manifest {
   google.protobuf.Timestamp provisioned_at = 7;
   // Data dir relative files the pack install claimed
   repeated string pack_files = 8;
+  // Hytale release channel the install came from
+  string hytale_patchline = 9;
+}
+
+// Panel owned Hytale settings kept in the server's state dir
+message HytaleSettings {
+  int32 version = 1;
+  // Release channel, "release" or "pre-release"
+  string patchline = 2;
 }

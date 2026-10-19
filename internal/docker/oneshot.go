@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
@@ -24,6 +25,14 @@ type OneShotOptions struct {
 	Env        []string
 	Network    string // Network to join, default bridge when empty
 	StrictData bool   // Fails when the host side of DataPath is missing
+	SplitCR    bool   // Carriage returns end lines too, for prompts redrawn in place
+	Mounts     []OneShotMount
+}
+
+// Extra host directory bound into a one-shot container
+type OneShotMount struct {
+	Source string // Panel side path, translated like DataPath
+	Target string
 }
 
 // Pulls image, runs command, removes container, errors on nonzero exit
@@ -61,6 +70,14 @@ func (c *Client) RunOneShot(ctx context.Context, opts OneShotOptions, logFn func
 			BindOptions: &mount.BindOptions{CreateMountpoint: !opts.StrictData},
 		}}
 	}
+	for _, m := range opts.Mounts {
+		hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
+			Type:        mount.TypeBind,
+			Source:      TranslateToHostPath(m.Source),
+			Target:      m.Target,
+			BindOptions: &mount.BindOptions{CreateMountpoint: false},
+		})
+	}
 	if c.config.DNS != "" {
 		hostConfig.DNS = []string{c.config.DNS}
 	}
@@ -95,7 +112,7 @@ func (c *Client) RunOneShot(ctx context.Context, opts OneShotOptions, logFn func
 		}
 		defer reader.Close()
 
-		lw := &lineWriter{fn: func(line string) {
+		lw := &lineWriter{splitCR: opts.SplitCR, fn: func(line string) {
 			line = strings.TrimRight(line, "\r\n")
 			if line == "" {
 				return
@@ -125,6 +142,11 @@ func (c *Client) RunOneShot(ctx context.Context, opts OneShotOptions, logFn func
 			return fmt.Errorf("command exited with code %d:\n%s", status.StatusCode, tail)
 		}
 	case <-ctx.Done():
+		// No output line may reach logFn after a cancelled run returns
+		select {
+		case <-logsDone:
+		case <-time.After(5 * time.Second):
+		}
 		return ctx.Err()
 	}
 
@@ -133,8 +155,9 @@ func (c *Client) RunOneShot(ctx context.Context, opts OneShotOptions, logFn func
 
 // Invokes fn once per full line written to it
 type lineWriter struct {
-	fn  func(string)
-	buf []byte
+	fn      func(string)
+	buf     []byte
+	splitCR bool
 }
 
 func (w *lineWriter) Write(p []byte) (int, error) {
@@ -142,7 +165,7 @@ func (w *lineWriter) Write(p []byte) (int, error) {
 	for {
 		idx := -1
 		for i, b := range w.buf {
-			if b == '\n' {
+			if b == '\n' || (w.splitCR && b == '\r') {
 				idx = i
 				break
 			}

@@ -36,6 +36,7 @@
 	import { SearchModpacksRequestSchema } from '$lib/proto/discopanel/v1/modpack_pb';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { loadModLoaders } from '$lib/stores/loaders';
+	import { Game } from '$lib/proto/discopanel/options/v1/options_pb';
 	import { debounce } from 'lodash-es';
 	import { uploadFile, cancelUpload, type UploadProgress } from '$lib/utils/chunked-upload';
 	import { formatBytes } from '$lib/utils';
@@ -129,7 +130,10 @@
 			const loaders = await loadModLoaders();
 			modLoaders = [
 				{ value: '', label: 'All loaders' },
-				...loaders.map((loader) => ({ value: loader.name, label: loader.displayName }))
+				// Modpacks are Minecraft only
+				...loaders
+					.filter((loader) => loader.game !== Game.HYTALE)
+					.map((loader) => ({ value: loader.name, label: loader.displayName }))
 			];
 		} catch (error) {
 			console.error('Failed to load mod loaders:', error);

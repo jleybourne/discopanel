@@ -334,8 +334,27 @@ func zipMethod(name string) uint16 {
 	return zip.Deflate
 }
 
-// Writes a zip archive of paths, returns file count
+// Panel state dir inside every server data dir, launch spec and agent token
+const PanelStateDir = ".discopanel"
+
+// Reports whether a data dir relative path is or sits under the panel state dir
+func IsPanelState(rel string) bool {
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	return rel == PanelStateDir || strings.HasPrefix(rel, PanelStateDir+"/")
+}
+
+// Writes a zip archive of paths, returns file count. The panel state dir
+// never goes into an archive, it holds the agent token.
 func CreateZipToWriter(paths []string, basePath string, w io.Writer, compress bool) (int, error) {
+	return CreateZipToWriterFiltered(paths, basePath, w, compress, nil)
+}
+
+// Like CreateZipToWriter, skip also drops entries by data dir relative path
+// and full path; a skipped directory is left out with everything below it
+func CreateZipToWriterFiltered(paths []string, basePath string, w io.Writer, compress bool, skip func(rel, full string) bool) (int, error) {
+	excluded := func(rel, full string) bool {
+		return IsPanelState(rel) || (skip != nil && skip(rel, full))
+	}
 	zw := zip.NewWriter(w)
 	defer zw.Close()
 
@@ -349,6 +368,9 @@ func CreateZipToWriter(paths []string, basePath string, w io.Writer, compress bo
 	count := 0
 	for _, p := range paths {
 		fullPath := filepath.Join(basePath, p)
+		if rel, err := filepath.Rel(basePath, fullPath); err == nil && excluded(rel, fullPath) {
+			continue
+		}
 		info, err := os.Stat(fullPath)
 		if err != nil {
 			return count, fmt.Errorf("failed to stat %s: %w", p, err)
@@ -360,6 +382,12 @@ func CreateZipToWriter(paths []string, basePath string, w io.Writer, compress bo
 					return err
 				}
 				rel, _ := filepath.Rel(basePath, path)
+				if excluded(rel, path) {
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
 				if d.IsDir() {
 					// Add directory entry with trailing slash
 					_, err := zw.Create(rel + "/")
@@ -419,13 +447,18 @@ func CreateZipToWriter(paths []string, basePath string, w io.Writer, compress bo
 
 // Creates a zip archive file on disk from paths
 func CreateZipArchive(paths []string, basePath string, destPath string, compress bool) (int, error) {
+	return CreateZipArchiveFiltered(paths, basePath, destPath, compress, nil)
+}
+
+// Like CreateZipArchive with an extra skip filter, see CreateZipToWriterFiltered
+func CreateZipArchiveFiltered(paths []string, basePath string, destPath string, compress bool, skip func(rel, full string) bool) (int, error) {
 	f, err := os.Create(destPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create archive file: %w", err)
 	}
 	defer f.Close()
 
-	count, err := CreateZipToWriter(paths, basePath, f, compress)
+	count, err := CreateZipToWriterFiltered(paths, basePath, f, compress, skip)
 	if err != nil {
 		os.Remove(destPath)
 		return 0, err

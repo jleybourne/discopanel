@@ -17,6 +17,7 @@ import (
 	"github.com/discohaus/discopanel/internal/command"
 	storage "github.com/discohaus/discopanel/internal/db"
 	"github.com/discohaus/discopanel/internal/docker"
+	"github.com/discohaus/discopanel/internal/hytaletracker"
 	"github.com/discohaus/discopanel/internal/lifecycle"
 	"github.com/discohaus/discopanel/internal/memlimit"
 	"github.com/discohaus/discopanel/internal/metrics"
@@ -30,6 +31,7 @@ import (
 	"github.com/discohaus/discopanel/pkg/hub"
 	"github.com/discohaus/discopanel/pkg/indexers"
 	"github.com/discohaus/discopanel/pkg/logger"
+	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 )
 
@@ -231,6 +233,20 @@ func main() {
 	lifecycleManager := lifecycle.NewManager(store, dockerClient, prov, sender, proxyManager, eventBus, cfg, rec, log)
 	lifecycleManager.SetPlayerCounter(metricsCollector)
 
+	// Hytale servers report boot, sign-in and players through console lines
+	hytaleTracker := hytaletracker.New(log)
+	hytaleTracker.SetCommander(sender)
+	// A login typed in the console may show its device code on the page
+	sender.SetCommandObserver(hytaleTracker.NoteConsoleCommand)
+	prov.SetHytaleTracker(hytaleTracker)
+	lifecycleManager.SetHytaleTracker(hytaleTracker)
+	metricsCollector.SetHytaleProbe(hytaleTracker)
+	for _, server := range servers {
+		if minecraft.IsHytale(server.ModLoader) {
+			hytaleTracker.Track(server.Id, server.DataPath)
+		}
+	}
+
 	// Proxy answers pings for paused servers, wakes logins
 	proxyManager.SetServerGate(lifecycleManager)
 
@@ -264,7 +280,7 @@ func main() {
 	defer lifecycleManager.StopIdleWatcher()
 
 	// Initialize RPC server with full configuration
-	rpcServer, err := rpc.NewServer(store, dockerClient, sender, cfg, proxyManager, taskScheduler, lifecycleManager, metricsCollector, moduleManager, eventBus, agentHub, prov, rec, log)
+	rpcServer, err := rpc.NewServer(store, dockerClient, sender, cfg, proxyManager, taskScheduler, lifecycleManager, metricsCollector, moduleManager, eventBus, agentHub, prov, hytaleTracker, rec, log)
 	if err != nil {
 		log.Fatal("Failed to initialize RPC server: %v", err)
 	}

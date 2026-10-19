@@ -19,7 +19,9 @@ import (
 	"github.com/discohaus/discopanel/internal/docker"
 	"github.com/discohaus/discopanel/internal/metrics"
 	"github.com/discohaus/discopanel/pkg/files"
+	"github.com/discohaus/discopanel/pkg/hytale"
 	"github.com/discohaus/discopanel/pkg/logger"
+	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 	"github.com/discohaus/discopanel/pkg/proto/discopanel/v1/discopanelv1connect"
 	"github.com/discohaus/discopanel/pkg/transfer"
@@ -88,6 +90,9 @@ func (s *FileService) ListFiles(ctx context.Context, req *connect.Request[v1.Lis
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
 	}
+	if err := s.guardPath(server, fullPath, true); err != nil {
+		return nil, err
+	}
 
 	// List directory
 	var files []*v1.FileInfo
@@ -103,7 +108,7 @@ func (s *FileService) ListFiles(ctx context.Context, req *connect.Request[v1.Lis
 	}
 
 	return connect.NewResponse(&v1.ListFilesResponse{
-		Files: files,
+		Files: visibleListing(server, files),
 	}), nil
 }
 
@@ -121,6 +126,9 @@ func (s *FileService) GetFile(ctx context.Context, req *connect.Request[v1.GetFi
 	fullPath, err := files.ResolveUnder(server.DataPath, msg.Path)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
+	}
+	if err := s.guardPath(server, fullPath, true); err != nil {
+		return nil, err
 	}
 
 	// Check if file exists
@@ -202,6 +210,9 @@ func (s *FileService) SaveUploadedFile(ctx context.Context, req *connect.Request
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
 	}
+	if err := s.guardPath(server, fullPath, false); err != nil {
+		return nil, err
+	}
 
 	// Create directories if needed
 	if err := os.MkdirAll(fullPath, 0755); err != nil {
@@ -211,6 +222,9 @@ func (s *FileService) SaveUploadedFile(ctx context.Context, req *connect.Request
 
 	// Move file from temp location to destination
 	destFilePath := filepath.Join(fullPath, targetFilename)
+	if err := s.guardPath(server, destFilePath, false); err != nil {
+		return nil, err
+	}
 	if err := os.Rename(tempPath, destFilePath); err != nil {
 		if err := files.CopyFile(tempPath, destFilePath); err != nil {
 			s.log.Error("Failed to move file: %v", err)
@@ -245,6 +259,9 @@ func (s *FileService) UpdateFile(ctx context.Context, req *connect.Request[v1.Up
 	fullPath, err := files.ResolveUnder(server.DataPath, msg.Path)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
+	}
+	if err := s.guardPath(server, fullPath, false); err != nil {
+		return nil, err
 	}
 
 	// Inline saves share the inline open limit
@@ -295,6 +312,9 @@ func (s *FileService) DeleteFile(ctx context.Context, req *connect.Request[v1.De
 		fullPath, err := files.ResolveUnder(server.DataPath, p)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid path: %s", p))
+		}
+		if err := s.guardPath(server, fullPath, false); err != nil {
+			return nil, err
 		}
 		if fullPath == filepath.Clean(server.DataPath) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("cannot delete server root directory"))
@@ -348,6 +368,9 @@ func (s *FileService) RenameFile(ctx context.Context, req *connect.Request[v1.Re
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
 	}
+	if err := s.guardPath(server, oldFullPath, true); err != nil {
+		return nil, err
+	}
 
 	// Build new path
 	dir := filepath.Dir(msg.Path)
@@ -357,6 +380,9 @@ func (s *FileService) RenameFile(ctx context.Context, req *connect.Request[v1.Re
 	newFullPath, err := files.ResolveUnder(server.DataPath, newPath)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid new path"))
+	}
+	if err := s.guardPath(server, newFullPath, false); err != nil {
+		return nil, err
 	}
 
 	// Check if source exists
@@ -400,6 +426,9 @@ func (s *FileService) ExtractArchive(ctx context.Context, req *connect.Request[v
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid archive path"))
 	}
+	if err := s.guardPath(server, fullArchivePath, true); err != nil {
+		return nil, err
+	}
 
 	// Check if archive exists
 	info, err := os.Stat(fullArchivePath)
@@ -427,6 +456,9 @@ func (s *FileService) ExtractArchive(ctx context.Context, req *connect.Request[v
 	}
 
 	destPath := filepath.Join(archiveDir, folderName)
+	if err := s.guardPath(server, destPath, false); err != nil {
+		return nil, err
+	}
 
 	// Start async extraction
 	opID := uuid.New().String()
@@ -513,6 +545,9 @@ func (s *FileService) CreateFolder(ctx context.Context, req *connect.Request[v1.
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
 	}
+	if err := s.guardPath(server, fullPath, false); err != nil {
+		return nil, err
+	}
 
 	if err := os.MkdirAll(fullPath, 0755); err != nil {
 		s.log.Error("Failed to create folder: %v", err)
@@ -538,9 +573,15 @@ func (s *FileService) MoveFile(ctx context.Context, req *connect.Request[v1.Move
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
 	}
+	if err := s.guardPath(server, srcFull, true); err != nil {
+		return nil, err
+	}
 	dstFull, err := files.ResolveUnder(server.DataPath, msg.DestinationPath)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
+	}
+	if err := s.guardPath(server, dstFull, false); err != nil {
+		return nil, err
 	}
 
 	if _, err := os.Stat(srcFull); err != nil {
@@ -603,9 +644,15 @@ func (s *FileService) CopyFile(ctx context.Context, req *connect.Request[v1.Copy
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
 	}
+	if err := s.guardPath(server, srcFull, true); err != nil {
+		return nil, err
+	}
 	dstFull, err := files.ResolveUnder(server.DataPath, msg.DestinationPath)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
+	}
+	if err := s.guardPath(server, dstFull, false); err != nil {
+		return nil, err
 	}
 
 	srcInfo, err := os.Stat(srcFull)
@@ -662,8 +709,12 @@ func (s *FileService) CreateArchive(ctx context.Context, req *connect.Request[v1
 
 	// Validate all paths
 	for _, p := range msg.Paths {
-		if _, err := files.ResolveUnder(server.DataPath, p); err != nil {
+		full, err := files.ResolveUnder(server.DataPath, p)
+		if err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid path: %s", p))
+		}
+		if err := s.guardPath(server, full, true); err != nil {
+			return nil, err
 		}
 	}
 
@@ -684,8 +735,11 @@ func (s *FileService) CreateArchive(ctx context.Context, req *connect.Request[v1
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid destination path"))
 	}
+	if err := s.guardPath(server, destFull, false); err != nil {
+		return nil, err
+	}
 
-	count, err := files.CreateZipArchive(msg.Paths, server.DataPath, destFull, true)
+	count, err := files.CreateZipArchiveFiltered(msg.Paths, server.DataPath, destFull, true, s.archiveSkip(server))
 	if err != nil {
 		s.log.Error("Failed to create archive: %v", err)
 		return nil, connect.NewError(connect.CodeInternal, errors.New("failed to create archive"))
@@ -714,8 +768,12 @@ func (s *FileService) DownloadArchive(ctx context.Context, req *connect.Request[
 	}
 
 	for _, p := range msg.Paths {
-		if _, err := files.ResolveUnder(server.DataPath, p); err != nil {
+		full, err := files.ResolveUnder(server.DataPath, p)
+		if err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid path: %s", p))
+		}
+		if err := s.guardPath(server, full, true); err != nil {
+			return nil, err
 		}
 	}
 
@@ -728,7 +786,7 @@ func (s *FileService) DownloadArchive(ctx context.Context, req *connect.Request[
 
 	// Create zip on disk in temp directory
 	tempPath := filepath.Join(s.downloadManager.TempDir(), fmt.Sprintf("download-%s.zip", time.Now().Format("20060102-150405.000")))
-	_, err = files.CreateZipArchive(msg.Paths, server.DataPath, tempPath, true)
+	_, err = files.CreateZipArchiveFiltered(msg.Paths, server.DataPath, tempPath, true, s.archiveSkip(server))
 	if err != nil {
 		s.log.Error("Failed to create download archive: %v", err)
 		return nil, connect.NewError(connect.CodeInternal, errors.New("failed to create archive"))
@@ -763,6 +821,9 @@ func (s *FileService) InitFileDownload(ctx context.Context, req *connect.Request
 	fullPath, err := files.ResolveUnder(server.DataPath, msg.Path)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("invalid path"))
+	}
+	if err := s.guardPath(server, fullPath, true); err != nil {
+		return nil, err
 	}
 
 	info, err := os.Stat(fullPath)
@@ -1003,4 +1064,53 @@ func (s *FileService) listDirectoryTree(path, basePath string, depth, maxDepth i
 	}
 
 	return lsFiles, nil
+}
+
+// Data dir paths the file browser never touches: the panel state dir with
+// the launch spec and agent token, and for Hytale servers the server's own
+// sign-in credentials, which can be deleted but never read or moved
+func privatePath(server *v1.Server, rel string, read bool) bool {
+	if files.IsPanelState(rel) {
+		return true
+	}
+	return read && minecraft.IsHytale(server.ModLoader) && hytale.IsSecretFile(rel)
+}
+
+// Refuses private paths, checked as given and after resolving symlinks
+func (s *FileService) guardPath(server *v1.Server, full string, read bool) error {
+	denied := connect.NewError(connect.CodePermissionDenied, errors.New("this path is managed by the panel and not available in the file browser"))
+	if rel, err := filepath.Rel(server.DataPath, full); err == nil && privatePath(server, rel, read) {
+		return denied
+	}
+	base, berr := filepath.EvalSymlinks(server.DataPath)
+	resolved, rerr := filepath.EvalSymlinks(full)
+	if berr == nil && rerr == nil {
+		if rel, err := filepath.Rel(base, resolved); err == nil && privatePath(server, rel, read) {
+			return denied
+		}
+	}
+	return nil
+}
+
+// Archive filter keeping private paths out, symlinks resolved
+func (s *FileService) archiveSkip(server *v1.Server) func(rel, full string) bool {
+	return func(_, full string) bool {
+		return s.guardPath(server, full, true) != nil
+	}
+}
+
+// Drops private entries from a listing
+func visibleListing(server *v1.Server, list []*v1.FileInfo) []*v1.FileInfo {
+	out := list[:0]
+	for _, f := range list {
+		if files.IsPanelState(f.Path) {
+			continue
+		}
+		if minecraft.IsHytale(server.ModLoader) && hytale.IsSecretFile(f.Path) {
+			f.IsEditable = false
+		}
+		f.Children = visibleListing(server, f.Children)
+		out = append(out, f)
+	}
+	return out
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/discohaus/discopanel/pkg/hytale"
 	"github.com/discohaus/discopanel/pkg/javaversions"
 	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
@@ -82,6 +83,10 @@ func (c *Client) RuntimeImageForTag(tag string) string {
 func (c *Client) DesiredImage(server *v1.Server) (string, error) {
 	if server.DockerImage != "" {
 		return c.RuntimeImageForTag(server.DockerImage), nil
+	}
+	// Hytale needs Java 25 and has no Minecraft version to resolve
+	if minecraft.IsHytale(server.ModLoader) {
+		return c.RuntimeImage(hytale.JavaMajor), nil
 	}
 	if major := int(server.JavaVersion); major > 0 {
 		return c.RuntimeImage(publishedJavaMajor(major)), nil

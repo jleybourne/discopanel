@@ -70,6 +70,17 @@ enum ModLoaderCategory {
   MOD_LOADER_CATEGORY_OTHER = 10 [(value) = {label: "Other"}];
 }
 
+// Game a server hosts, unspecified reads as Minecraft: Java Edition
+enum Game {
+  option (enum_type) = {label: "Game"};
+  GAME_UNSPECIFIED = 0 [(value) = {label: "Unknown"}];
+  GAME_MINECRAFT_JAVA = 1 [(value) = {
+    name: "minecraft"
+    label: "Minecraft: Java Edition"
+  }];
+  GAME_HYTALE = 2 [(value) = {label: "Hytale"}];
+}
+
 // Loader facts annotated on one ModLoader value
 message LoaderMeta {
   ModLoaderCategory category = 1;
@@ -80,6 +91,7 @@ message LoaderMeta {
   repeated string facets = 6; // Indexer loader names that source jars
   repeated string markers = 7; // Data-dir paths proving the platform installed
   PackSource pack_source = 8; // Set on loaders that install packs
+  Game game = 9; // Game the loader serves, unset means Minecraft: Java Edition
 }
 
 // Permission domains guarding the API
