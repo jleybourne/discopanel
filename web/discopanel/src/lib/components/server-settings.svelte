@@ -9,7 +9,7 @@
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Switch } from '$lib/components/ui/switch';
 	import { ServerAvatar } from '$lib/components/app';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { rpcClient, rpcErrorMessage } from '$lib/api/rpc-client';
 	import { clone, create } from '@bufbuild/protobuf';
 	import { notify } from '$lib/stores/activity.svelte';
 	import { Loader2, Save, RotateCcw, Lock, Camera, CircleArrowUp } from '@lucide/svelte';
@@ -35,6 +35,8 @@
 	import DockerOverridesEditor from '$lib/components/docker-overrides-editor.svelte';
 	import { containerRoot, volumeSourceRoots } from '$lib/components/files/picker-roots';
 	import MemorySlider from '$lib/components/memory-slider.svelte';
+	import ConfigOverridesEditor from '$lib/components/config-overrides/config-overrides-editor.svelte';
+	import { ConfigOverridesForm } from '$lib/components/config-overrides/config-overrides-form.svelte';
 	import { getUniqueDockerImages, encodeIconUpload } from '$lib/utils';
 
 	interface Props {
@@ -45,7 +47,15 @@
 	let { server, onUpdate }: Props = $props();
 
 	// Old section anchors stay valid for shared links
-	const SECTION_IDS = ['modpack', 'general', 'runtime', 'network', 'lifecycle', 'container'];
+	const SECTION_IDS = [
+		'modpack',
+		'general',
+		'runtime',
+		'network',
+		'lifecycle',
+		'config-overrides',
+		'container'
+	];
 
 	const FIELD_KEYS = [
 		'name',
@@ -232,7 +242,10 @@
 		baseline = clone(UpdateServerRequestSchema, fresh);
 	}
 
-	let dirtyCount = $derived(FIELD_KEYS.filter((key) => fieldDirty(key)).length);
+	const overrides = new ConfigOverridesForm();
+
+	let settingsDirtyCount = $derived(FIELD_KEYS.filter((key) => fieldDirty(key)).length);
+	let dirtyCount = $derived(settingsDirtyCount + overrides.dirtyCount);
 	let dirty = $derived(dirtyCount > 0);
 
 	guardUnsavedChanges(() => dirty && !saving);
@@ -263,6 +276,7 @@
 				saving = false;
 				uploadedFavicon = '';
 				loadOptions();
+				overrides.load(server.id);
 				return;
 			}
 			rebaseOnServer();
@@ -271,6 +285,7 @@
 
 	onMount(() => {
 		loadOptions();
+		overrides.load(server.id);
 		checkUrlHash();
 		window.addEventListener('hashchange', checkUrlHash);
 		return () => window.removeEventListener('hashchange', checkUrlHash);
@@ -310,12 +325,23 @@
 		if (!dirty || saving) return;
 		saving = true;
 		try {
-			await rpcClient.server.updateServer(
-				create(UpdateServerRequestSchema, {
-					...formData,
-					clearAdditionalPorts: (formData.additionalPorts?.length ?? 0) === 0
-				})
-			);
+			if (overrides.dirtyCount > 0) {
+				try {
+					await overrides.save(server.id);
+				} catch (error) {
+					notify.error(rpcErrorMessage(error, 'Failed to save config overrides'));
+					console.error(error);
+					return;
+				}
+			}
+			if (settingsDirtyCount > 0) {
+				await rpcClient.server.updateServer(
+					create(UpdateServerRequestSchema, {
+						...formData,
+						clearAdditionalPorts: (formData.additionalPorts?.length ?? 0) === 0
+					})
+				);
+			}
 			notify.success(
 				stopped ? 'Settings saved' : 'Settings saved. Restart the server to apply changes.'
 			);
@@ -329,6 +355,7 @@
 	}
 
 	function reset() {
+		overrides.reset();
 		formData = buildFormData();
 		baseline = clone(UpdateServerRequestSchema, buildFormData());
 	}
@@ -801,6 +828,23 @@
 							onCheckedChange={setDetached}
 						/>
 					</div>
+				</div>
+			</section>
+
+			<section id="config-overrides" class="scroll-mt-4">
+				<div class="mb-2 flex items-center gap-1.5">
+					<h3 class="text-sm font-medium">Config overrides</h3>
+					{#if overrides.dirtyCount > 0}
+						<span class="size-1.5 rounded-full bg-status-busy" title="Unsaved change"></span>
+					{/if}
+				</div>
+				<div class="rounded-xl border bg-card p-4">
+					<ConfigOverridesEditor
+						form={overrides}
+						serverId={server.id}
+						disabled={saving}
+						onRetry={() => overrides.load(server.id)}
+					/>
 				</div>
 			</section>
 
