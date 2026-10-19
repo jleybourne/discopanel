@@ -1,6 +1,9 @@
 services:
   discopanel:
-    image: ghcr.io/discohaus/discopanel:latest
+    # v3 is in beta, so there is no :latest image yet; it returns with the
+    # first stable v3 release. Releases after beta.8 also publish :beta,
+    # which follows the newest beta.
+    image: ghcr.io/discohaus/discopanel:v3.0.0-beta.8
     container_name: discopanel
     restart: unless-stopped
 
