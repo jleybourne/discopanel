@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	storage "github.com/discohaus/discopanel/internal/db"
 	"github.com/discohaus/discopanel/internal/docker"
 	"github.com/discohaus/discopanel/internal/metrics"
+	"github.com/discohaus/discopanel/internal/modupdates"
 	"github.com/discohaus/discopanel/internal/provisioner"
 	"github.com/discohaus/discopanel/pkg/config"
 	"github.com/discohaus/discopanel/pkg/files"
@@ -49,6 +49,10 @@ type ModService struct {
 	cfPrints  map[string]uint32
 	cfSweeps  map[string]bool
 	cfRetryAt map[string]time.Time
+
+	updates     *modupdates.Checker
+	downloader  *modupdates.Downloader
+	updateLocks serverLocks
 }
 
 // Failed sweeps wait this long before asking the api again
@@ -74,6 +78,8 @@ func NewModService(store *storage.Store, docker *docker.Client, cfg *config.Conf
 		cfPrints:      map[string]uint32{},
 		cfSweeps:      map[string]bool{},
 		cfRetryAt:     map[string]time.Time{},
+		updates:       modupdates.NewChecker(),
+		downloader:    modupdates.NewDownloader(cfg.Server.UserAgent),
 	}
 }
 
@@ -427,7 +433,7 @@ func (s *ModService) placeMod(ctx context.Context, server *v1.Server, srcPath, n
 	// The name comes from the uploader (or an upstream index). A name with
 	// path segments such as "../../other/plugins/x.jar" would otherwise be
 	// joined onto the mods dir and write a jar anywhere the panel can.
-	if !isPlainFileName(name) {
+	if !files.IsPlainFileName(name) {
 		return nil, nil, connect.NewError(connect.CodeInvalidArgument, errors.New("mod file name must be a plain file name"))
 	}
 	if !minecraft.IsValidModFile(name, server.ModLoader) {
@@ -616,21 +622,4 @@ func (s *ModService) DeleteMod(ctx context.Context, req *connect.Request[v1.Dele
 	return connect.NewResponse(&v1.DeleteModResponse{
 		Message: "Mod deleted successfully",
 	}), nil
-}
-
-// Reports whether name is a single, ordinary file name: no directory
-// parts, not "." or "..", not hidden, no NUL or control characters.
-func isPlainFileName(name string) bool {
-	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, "/\\") {
-		return false
-	}
-	if name == "." || name == ".." || strings.HasPrefix(name, ".") {
-		return false
-	}
-	for _, r := range name {
-		if r < 0x20 || r == 0x7f {
-			return false
-		}
-	}
-	return true
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/discohaus/discopanel/internal/lifecycle"
 	"github.com/discohaus/discopanel/internal/metrics"
 	"github.com/discohaus/discopanel/internal/module"
+	"github.com/discohaus/discopanel/internal/modupdates"
 	"github.com/discohaus/discopanel/internal/provisioner"
 	"github.com/discohaus/discopanel/internal/proxy"
 	"github.com/discohaus/discopanel/internal/rbac"
@@ -1122,6 +1123,12 @@ func (s *ServerService) deleteServerLocked(ctx context.Context, server *v1.Serve
 	// bad or empty data_path must not turn into rm -rf of the wrong tree)
 	if err := s.removeServerData(server.DataPath); err != nil {
 		s.log.Error("Failed to delete server data: %v", err)
+	}
+	// Plugin update backups live in panel storage, not the data dir
+	if base, err := modupdates.BackupBase(s.config.Storage.DataDir, server.Id); err == nil {
+		if err := os.RemoveAll(base); err != nil {
+			s.log.Error("Failed to delete mod update backups: %v", err)
+		}
 	}
 	return nil
 }

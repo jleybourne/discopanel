@@ -501,3 +501,20 @@ func CopyFile(src, dst string) error {
 	// Exec bits and friends survive the copy
 	return os.Chmod(dst, info.Mode().Perm())
 }
+
+// IsPlainFileName reports whether name is a single, ordinary file name: no directory
+// parts, not "." or "..", not hidden, no NUL or control characters.
+func IsPlainFileName(name string) bool {
+	if name == "" || name != filepath.Base(name) || strings.ContainsAny(name, "/\\") {
+		return false
+	}
+	if name == "." || name == ".." || strings.HasPrefix(name, ".") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
