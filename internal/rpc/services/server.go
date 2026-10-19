@@ -12,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -78,6 +80,9 @@ type ServerService struct {
 
 	// Encoded server icons cached by file identity
 	favicons minecraft.FaviconCache
+
+	// Upload sessions an import is extracting or placing
+	importsBusy sync.Map
 }
 
 // Normalizes additional ports, proxied ones may route
@@ -391,6 +396,47 @@ func (s *ServerService) GetServer(ctx context.Context, req *connect.Request[v1.G
 func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v1.CreateServerRequest]) (*connect.Response[v1.CreateServerResponse], error) {
 	msg := req.Msg
 
+	// Imported servers take loader, version and name from their files
+	var imported *stagedImport
+	var importDet *provisioner.ImportDetection
+	if msg.ImportUploadSessionId != "" {
+		if msg.ModpackId != "" || msg.WorldUploadSessionId != "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("an imported server cannot also install a modpack or import a world"))
+		}
+		release, err := s.claimServerImport(msg.ImportUploadSessionId)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		imported, err = s.stageServerImport(ctx, msg.ImportUploadSessionId)
+		if err != nil {
+			return nil, err
+		}
+		importDet = provisioner.DetectImportedServer(imported.root)
+
+		if msg.ModLoader == v1.ModLoader_MOD_LOADER_UNSPECIFIED {
+			msg.ModLoader = importDet.Loader
+		}
+		// Pack platforms reinstall from their source, imports keep files
+		if minecraft.PackSourceFor(msg.ModLoader) != optionsv1.PackSource_PACK_SOURCE_UNSPECIFIED {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("imported servers need the loader their files run, not a modpack platform"))
+		}
+		if provisioner.ImportLaunch(imported.root, msg.ModLoader) == nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, provisioner.ErrNoImportLaunch)
+		}
+		if msg.McVersion == "" {
+			msg.McVersion = importDet.McVersion
+		}
+		if strings.TrimSpace(msg.Name) == "" {
+			msg.Name = imported.suggestedName()
+		}
+		if msg.MaxPlayers == 0 {
+			if v, err := strconv.Atoi(strings.TrimSpace(importDet.Properties["max-players"])); err == nil && v > 0 {
+				msg.MaxPlayers = int32(v)
+			}
+		}
+	}
+
 	// Convert mod loader from proto
 	modLoader := msg.ModLoader
 
@@ -582,6 +628,23 @@ func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create server directory"))
 	}
 
+	// Imported server files land before the row so failures stay clean
+	if imported != nil {
+		if err := placeServerImport(imported, server.DataPath); err != nil {
+			s.log.Error("Failed to place server import: %v", err)
+			os.RemoveAll(server.DataPath)
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("server import failed: %w", err))
+		}
+		loaderVersion := ""
+		if server.ModLoader == importDet.Loader {
+			loaderVersion = importDet.LoaderVersion
+		}
+		if err := provisioner.AdoptImportedServer(server, loaderVersion); err != nil {
+			os.RemoveAll(server.DataPath)
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("server import failed: %w", err))
+		}
+	}
+
 	// Imported world lands before the row so failures stay clean
 	importedLevelName := ""
 	if msg.WorldUploadSessionId != "" {
@@ -609,6 +672,11 @@ func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v
 	serverConfig := s.serverPropertiesOrDefault(ctx, server.Id)
 	if importedLevelName != "" {
 		serverConfig.Level = &importedLevelName
+	}
+
+	// Imported server.properties beats inherited defaults
+	if importDet != nil {
+		applyImportSettings(serverConfig, server, importDet)
 	}
 
 	// Reflects heap sizing into read-only properties
@@ -645,9 +713,11 @@ func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v
 		s.log.Info("Server %s created but not started immediately", server.Id)
 	}
 
-	return connect.NewResponse(&v1.CreateServerResponse{
-		Server: server.Redact(),
-	}), nil
+	resp := &v1.CreateServerResponse{Server: server.Redact()}
+	if importDet != nil {
+		resp.ImportAnalysis = importAnalysis(imported, importDet)
+	}
+	return connect.NewResponse(resp), nil
 }
 
 // UpdateServer updates a server
