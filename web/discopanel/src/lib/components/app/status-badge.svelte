@@ -6,9 +6,12 @@
 
 	let {
 		status,
+		label = '',
 		class: className = ''
 	}: {
 		status: ServerStatus;
+		// Overrides the status name, tone stays the status's
+		label?: string;
 		class?: string;
 	} = $props();
 
@@ -27,5 +30,5 @@
 	{:else}
 		<span class={cn('size-1.5 rounded-full', TONE_BG[meta.tone])}></span>
 	{/if}
-	{meta.label}
+	{label || meta.label}
 </span>

@@ -13,6 +13,7 @@ import (
 	"github.com/discohaus/discopanel/pkg/config"
 	"github.com/discohaus/discopanel/pkg/events"
 	"github.com/discohaus/discopanel/pkg/files"
+	"github.com/discohaus/discopanel/pkg/hytale"
 	"github.com/discohaus/discopanel/pkg/logger"
 	"github.com/discohaus/discopanel/pkg/minecraft"
 	agentv1 "github.com/discohaus/discopanel/pkg/proto/discopanel/agent/v1"
@@ -258,6 +259,22 @@ type Collector struct {
 	wg       sync.WaitGroup
 
 	collectorConfig CollectorConfig
+
+	// Console derived health and players for Hytale servers
+	hytale HytaleProbe
+}
+
+// Hytale has no status ping, the console says when it booted
+type HytaleProbe interface {
+	Booted(serverID string) bool
+	PlayersOnline(serverID string) (int, []string, bool)
+	// Container run changes reset console state the probe keeps
+	ObserveContainer(serverID string, startedAt time.Time, running bool)
+}
+
+// Wires the Hytale console probe after construction
+func (c *Collector) SetHytaleProbe(p HytaleProbe) {
+	c.hytale = p
 }
 
 // Wires the activity ledger the version scan writes to
@@ -553,7 +570,7 @@ func (c *Collector) collectDiskUsage() {
 		if c.dataPathMissing(server.Id) {
 			continue
 		}
-		c.sampleDiskUsage(server.Id, server.DataPath)
+		c.sampleDiskUsage(server.Id, server.DataPath, server.ModLoader)
 	}
 }
 
@@ -565,7 +582,7 @@ func (c *Collector) dataPathMissing(serverID string) bool {
 }
 
 // Samples one server data dir and its volume
-func (c *Collector) sampleDiskUsage(serverID, dataPath string) {
+func (c *Collector) sampleDiskUsage(serverID, dataPath string, loader v1.ModLoader) {
 	if dataPath == "" {
 		return
 	}
@@ -590,7 +607,7 @@ func (c *Collector) sampleDiskUsage(serverID, dataPath string) {
 
 	// A missing world means zero, other data still counts
 	var totalWorldSize int64
-	if worldPaths, err := files.FindWorldDirs(dataPath); err == nil {
+	if worldPaths, err := hytale.ServerWorldDirs(dataPath, loader); err == nil {
 		for _, worldPath := range worldPaths {
 			size, err := files.CalculateDirSize(worldPath)
 			if err != nil {
@@ -626,7 +643,7 @@ func (c *Collector) onLifecycleEvent(ctx context.Context, e events.Event) {
 		if err != nil {
 			return
 		}
-		c.sampleDiskUsage(server.Id, server.DataPath)
+		c.sampleDiskUsage(server.Id, server.DataPath, server.ModLoader)
 		// A fresh install may have changed the installed pack version
 		if e.Type == v1.TriggeredEventType_TRIGGERED_EVENT_TYPE_SERVER_START {
 			c.checkModpackVersion(lookupCtx, server, nil)
@@ -775,11 +792,22 @@ func (c *Collector) collectSLPData() {
 
 		// Pings raw containers, must not consult GetContainerStatus here
 		info, err := c.docker.GetContainerRunInfo(ctx, server.ContainerId)
+		if err == nil && c.hytale != nil && minecraft.IsHytale(server.ModLoader) {
+			// Paused keeps its run, crash and in-game stop end it
+			if !info.Paused {
+				c.hytale.ObserveContainer(server.Id, info.StartedAt, info.Running)
+			}
+		}
 		if err != nil || !info.Running || info.Paused {
 			c.clearHealth(server.ContainerId)
 			c.updateMetrics(server.Id, func(m *ServerMetrics) {
 				m.SlpAvailable = false
 			})
+			continue
+		}
+
+		if minecraft.IsHytale(server.ModLoader) {
+			c.collectHytale(server, info.StartedAt)
 			continue
 		}
 
@@ -832,6 +860,30 @@ func (c *Collector) collectSLPData() {
 			m.LastUpdated = time.Now()
 		})
 	}
+}
+
+// Folds console state into health, no record until the boot line matched
+// so an unrecognized log degrades to running rather than unhealthy
+func (c *Collector) collectHytale(server *v1.Server, startedAt time.Time) {
+	if c.hytale == nil {
+		return
+	}
+	if c.hytale.Booted(server.Id) {
+		c.recordHealth(server.ContainerId, startedAt, true)
+	}
+	count, names, known := c.hytale.PlayersOnline(server.Id)
+	c.updateMetrics(server.Id, func(m *ServerMetrics) {
+		m.SlpAvailable = false
+		m.MaxPlayers = int(server.MaxPlayers)
+		if known {
+			m.PlayersOnline = count
+			m.PlayerSample = names
+		} else {
+			m.PlayersOnline = 0
+			m.PlayerSample = nil
+		}
+		m.LastUpdated = time.Now()
+	})
 }
 
 // Compares each servers current health/player state against the previous state

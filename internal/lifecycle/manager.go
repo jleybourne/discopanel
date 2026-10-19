@@ -15,6 +15,7 @@ import (
 	"github.com/discohaus/discopanel/internal/command"
 	storage "github.com/discohaus/discopanel/internal/db"
 	"github.com/discohaus/discopanel/internal/docker"
+	"github.com/discohaus/discopanel/internal/hytaletracker"
 	"github.com/discohaus/discopanel/internal/metrics"
 	"github.com/discohaus/discopanel/internal/provisioner"
 	"github.com/discohaus/discopanel/internal/proxy"
@@ -22,6 +23,7 @@ import (
 	"github.com/discohaus/discopanel/pkg/events"
 	"github.com/discohaus/discopanel/pkg/javaversions"
 	"github.com/discohaus/discopanel/pkg/logger"
+	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 	"github.com/discohaus/discopanel/pkg/protometa"
 	"github.com/discohaus/discopanel/pkg/runtimespec"
@@ -45,6 +47,7 @@ type Manager struct {
 	rec      *metrics.Recorder
 	players  PlayerCounter
 	streamer *logger.LogStreamer
+	hytale   *hytaletracker.Tracker
 
 	// Per-server transition gate rejects overlapping operations
 	startMu     sync.Mutex
@@ -93,6 +96,11 @@ func NewManager(store *storage.Store, dockerClient *docker.Client, prov *provisi
 // Wires collector after construction to avoid circular dependency
 func (m *Manager) SetPlayerCounter(pc PlayerCounter) {
 	m.players = pc
+}
+
+// Wires the Hytale tracker, reset per run so sign-in prompts start fresh
+func (m *Manager) SetHytaleTracker(t *hytaletracker.Tracker) {
+	m.hytale = t
 }
 
 // Wires log streamer so container output reaches server log stream
@@ -465,6 +473,11 @@ func (m *Manager) start(ctx context.Context, serverID string) error {
 		return err
 	}
 
+	// A fresh run may sign in and persist again, replayed logs never do
+	if m.hytale != nil && minecraft.IsHytale(server.ModLoader) {
+		m.hytale.BeginRun(server.Id, server.DataPath)
+	}
+
 	// Start it
 	m.console(server.Id, "starting container...")
 	if err := m.docker.StartContainer(ctx, server.ContainerId); err != nil {
@@ -652,7 +665,7 @@ func (m *Manager) stop(ctx context.Context, serverID string) error {
 			m.log.Warn("lifecycle: failed to unpause %s before stop: %v", server.Name, err)
 		}
 		m.setPaused(server.Id, false)
-	} else if announceDelay > 0 && m.containerLive(ctx, server.ContainerId) {
+	} else if announceDelay > 0 && !minecraft.IsHytale(server.ModLoader) && m.containerLive(ctx, server.ContainerId) {
 		msg := fmt.Sprintf("say Server is shutting down in %d seconds", announceDelay)
 		if _, err := m.sender.SendCommand(ctx, server.Id, msg); err == nil {
 			select {
@@ -685,6 +698,9 @@ func (m *Manager) stop(ctx context.Context, serverID string) error {
 
 	m.setPaused(server.Id, false)
 	m.resetIdle(server.Id)
+	if m.hytale != nil {
+		m.hytale.EndRun(server.Id)
+	}
 
 	if m.bus != nil {
 		m.bus.Emit(ctx, events.Event{

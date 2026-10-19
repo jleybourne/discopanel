@@ -4,7 +4,8 @@
 	import { formatBytes } from '$lib/utils';
 	import { AlertTriangle } from '@lucide/svelte';
 
-	let { server }: { server: Server } = $props();
+	// TPS is measured by the Minecraft agent, other games hide the row
+	let { server, showTps = true }: { server: Server; showTps?: boolean } = $props();
 
 	let agentHeap = $derived(server.agentConnected && server.heapMaxMb > 0);
 	let memUsageMb = $derived(Number(server.memoryUsage));
@@ -154,30 +155,32 @@
 			</p>
 		</div>
 
-		<div>
-			<div class="mb-1.5 flex items-baseline justify-between">
-				<span class="text-xs font-medium text-muted-foreground">TPS</span>
-				{#if server.agentConnected && server.tps > 0}
-					<span class="tabular font-mono text-xs font-semibold {TONE_TEXT[tpsTone(server.tps)]}">
-						{server.tps.toFixed(1)}
-						{#if server.mspt > 0}
-							<span class="ml-1 font-normal text-muted-foreground"
-								>{server.mspt.toFixed(1)}ms/tick</span
-							>
-						{/if}
-					</span>
-				{:else}
-					<span class="font-mono text-xs text-muted-foreground">--</span>
-				{/if}
+		{#if showTps}
+			<div>
+				<div class="mb-1.5 flex items-baseline justify-between">
+					<span class="text-xs font-medium text-muted-foreground">TPS</span>
+					{#if server.agentConnected && server.tps > 0}
+						<span class="tabular font-mono text-xs font-semibold {TONE_TEXT[tpsTone(server.tps)]}">
+							{server.tps.toFixed(1)}
+							{#if server.mspt > 0}
+								<span class="ml-1 font-normal text-muted-foreground"
+									>{server.mspt.toFixed(1)}ms/tick</span
+								>
+							{/if}
+						</span>
+					{:else}
+						<span class="font-mono text-xs text-muted-foreground">--</span>
+					{/if}
+				</div>
+				<div class="h-2 overflow-hidden rounded-full bg-muted">
+					{#if server.agentConnected && server.tps > 0}
+						<div
+							class="h-full rounded-full transition-all duration-500 {TONE_BG[tpsTone(server.tps)]}"
+							style="width: {Math.min((server.tps / 20) * 100, 100)}%"
+						></div>
+					{/if}
+				</div>
 			</div>
-			<div class="h-2 overflow-hidden rounded-full bg-muted">
-				{#if server.agentConnected && server.tps > 0}
-					<div
-						class="h-full rounded-full transition-all duration-500 {TONE_BG[tpsTone(server.tps)]}"
-						style="width: {Math.min((server.tps / 20) * 100, 100)}%"
-					></div>
-				{/if}
-			</div>
-		</div>
+		{/if}
 	</div>
 </div>

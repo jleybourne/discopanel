@@ -14,6 +14,7 @@ import (
 	"github.com/discohaus/discopanel/internal/lifecycle"
 	"github.com/discohaus/discopanel/internal/metrics"
 	"github.com/discohaus/discopanel/pkg/files"
+	"github.com/discohaus/discopanel/pkg/hytale"
 	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -171,7 +172,7 @@ func (s *ServerService) RestoreBackup(ctx context.Context, req *connect.Request[
 		}
 
 		// Snapshot current world first so a restore is reversible
-		if worldDirs, err := files.FindWorldDirs(fresh.DataPath); err == nil && len(worldDirs) > 0 {
+		if worldDirs, err := hytale.ServerWorldDirs(fresh.DataPath, fresh.ModLoader); err == nil && len(worldDirs) > 0 {
 			rels := make([]string, 0, len(worldDirs))
 			for _, w := range worldDirs {
 				if rel, err := filepath.Rel(fresh.DataPath, w); err == nil {
@@ -185,7 +186,11 @@ func (s *ServerService) RestoreBackup(ctx context.Context, req *connect.Request[
 			}
 		}
 
-		if err := restoreArchiveExact(ctx, archivePath, fresh.DataPath); err != nil {
+		restore := restoreArchiveExact
+		if minecraft.IsHytale(fresh.ModLoader) {
+			restore = restoreHytaleArchive
+		}
+		if err := restore(ctx, archivePath, fresh.DataPath); err != nil {
 			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restore backup: %w", err))
 		}
 		if err := prunePreRestoreSnapshots(dir, keepPreRestoreSnapshots); err != nil {

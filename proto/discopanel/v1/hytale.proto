@@ -1,0 +1,206 @@
+syntax = "proto3";
+
+package discopanel.v1;
+
+import "discopanel/options/v1/options.proto";
+
+option go_package = "github.com/discohaus/discopanel/pkg/proto/discopanel/v1;discopanelv1";
+
+// Hytale server configuration, account and mods
+service HytaleService {
+  // Read config.json, whitelist.json and panel Hytale settings
+  rpc GetHytaleConfig(GetHytaleConfigRequest) returns (GetHytaleConfigResponse) {
+    option (discopanel.options.v1.perm) = {
+      resource: RESOURCE_TYPE_SERVER_PROPERTIES
+      action: ACTION_TYPE_READ
+      object_id_field: "server_id"
+    };
+  }
+  // Write config.json and whitelist.json, unknown keys are kept
+  rpc UpdateHytaleConfig(UpdateHytaleConfigRequest) returns (UpdateHytaleConfigResponse) {
+    option (discopanel.options.v1.perm) = {
+      resource: RESOURCE_TYPE_SERVER_PROPERTIES
+      action: ACTION_TYPE_UPDATE
+      object_id_field: "server_id"
+    };
+  }
+  // Ask the running server for a new device sign-in
+  rpc StartHytaleSignIn(StartHytaleSignInRequest) returns (StartHytaleSignInResponse) {
+    option (discopanel.options.v1.perm) = {
+      resource: RESOURCE_TYPE_SERVERS
+      action: ACTION_TYPE_COMMAND
+      object_id_field: "server_id"
+    };
+  }
+  // List plugins and asset packs in mods/
+  rpc ListHytaleMods(ListHytaleModsRequest) returns (ListHytaleModsResponse) {
+    option (discopanel.options.v1.perm) = {
+      resource: RESOURCE_TYPE_MODS
+      action: ACTION_TYPE_READ
+      object_id_field: "server_id"
+    };
+  }
+  // Place an uploaded .jar or .zip in mods/
+  rpc ImportHytaleMod(ImportHytaleModRequest) returns (ImportHytaleModResponse) {
+    option (discopanel.options.v1.perm) = {
+      resource: RESOURCE_TYPE_MODS
+      action: ACTION_TYPE_CREATE
+      object_id_field: "server_id"
+    };
+  }
+  // Enable or disable one mod file
+  rpc SetHytaleModEnabled(SetHytaleModEnabledRequest) returns (SetHytaleModEnabledResponse) {
+    option (discopanel.options.v1.perm) = {
+      resource: RESOURCE_TYPE_MODS
+      action: ACTION_TYPE_UPDATE
+      object_id_field: "server_id"
+    };
+  }
+  // Delete one mod file
+  rpc DeleteHytaleMod(DeleteHytaleModRequest) returns (DeleteHytaleModResponse) {
+    option (discopanel.options.v1.perm) = {
+      resource: RESOURCE_TYPE_MODS
+      action: ACTION_TYPE_DELETE
+      object_id_field: "server_id"
+    };
+  }
+}
+
+// Shape of whitelist.json as the panel understood it
+enum HytaleWhitelistFormat {
+  option (discopanel.options.v1.enum_type) = {label: "Whitelist Format"};
+  HYTALE_WHITELIST_FORMAT_UNSPECIFIED = 0 [(discopanel.options.v1.value) = {label: "Unknown"}];
+  // No whitelist.json yet, the server writes it on first start
+  HYTALE_WHITELIST_FORMAT_MISSING = 1 [(discopanel.options.v1.value) = {label: "Not created yet"}];
+  // An object with a boolean enabled and a string list
+  HYTALE_WHITELIST_FORMAT_RECOGNIZED = 2 [(discopanel.options.v1.value) = {label: "Recognized"}];
+  // Some other shape, edit it in Files
+  HYTALE_WHITELIST_FORMAT_UNRECOGNIZED = 3 [(discopanel.options.v1.value) = {label: "Unrecognized"}];
+}
+
+// Editable Hytale settings
+message HytaleConfig {
+  string server_name = 1;
+  string motd = 2;
+  string password = 3;
+  int32 max_players = 4;
+  int32 max_view_radius = 5;
+  // Release channel, "release" or "pre-release"
+  string patchline = 6;
+  HytaleWhitelistFormat whitelist_format = 7;
+  bool whitelist_enabled = 8;
+  // Entries exactly as whitelist.json stores them
+  repeated string whitelist = 9;
+  // False before the server wrote config.json, values are then defaults
+  bool config_exists = 10;
+  // Edits wait in a pending file because the server is running
+  bool pending_restart = 11;
+  // Join password withheld, reading it needs the Files read permission
+  bool password_hidden = 12;
+  // A join password is set, also when hidden
+  bool password_set = 13;
+}
+
+// Server whose Hytale settings to read
+message GetHytaleConfigRequest {
+  string server_id = 1;
+}
+
+// Current Hytale settings
+message GetHytaleConfigResponse {
+  HytaleConfig config = 1;
+}
+
+// Fields to change, unset fields keep their value
+message UpdateHytaleConfigRequest {
+  string server_id = 1;
+  optional string server_name = 2;
+  optional string motd = 3;
+  optional string password = 4;
+  optional int32 max_players = 5;
+  optional int32 max_view_radius = 6;
+  optional string patchline = 7;
+  optional bool whitelist_enabled = 8;
+  // Replaces the list when update_whitelist is set
+  repeated string whitelist = 9;
+  bool update_whitelist = 10;
+  // Re-download the server files on the next start
+  bool reinstall = 11;
+}
+
+// Settings after the update
+message UpdateHytaleConfigResponse {
+  HytaleConfig config = 1;
+}
+
+// Server to sign in
+message StartHytaleSignInRequest {
+  string server_id = 1;
+}
+
+// Sign-in request result
+message StartHytaleSignInResponse {
+  string message = 1;
+}
+
+// Kind of file in mods/
+enum HytaleModKind {
+  option (discopanel.options.v1.enum_type) = {label: "Mod Kind"};
+  HYTALE_MOD_KIND_UNSPECIFIED = 0 [(discopanel.options.v1.value) = {label: "Unknown"}];
+  // Java plugin, .jar
+  HYTALE_MOD_KIND_PLUGIN = 1 [(discopanel.options.v1.value) = {label: "Plugin"}];
+  // Asset pack, .zip
+  HYTALE_MOD_KIND_ASSET_PACK = 2 [(discopanel.options.v1.value) = {label: "Asset pack"}];
+}
+
+// One plugin or asset pack
+message HytaleMod {
+  string file_name = 1;
+  HytaleModKind kind = 2;
+  int64 size = 3;
+  bool enabled = 4;
+}
+
+// Server whose mods to list
+message ListHytaleModsRequest {
+  string server_id = 1;
+}
+
+// Mods sorted by name
+message ListHytaleModsResponse {
+  repeated HytaleMod mods = 1;
+}
+
+// Upload session holding a .jar or .zip
+message ImportHytaleModRequest {
+  string server_id = 1;
+  string upload_session_id = 2;
+}
+
+// Placed mod
+message ImportHytaleModResponse {
+  HytaleMod mod = 1;
+}
+
+// Toggle for one mod file
+message SetHytaleModEnabledRequest {
+  string server_id = 1;
+  string file_name = 2;
+  bool enabled = 3;
+}
+
+// Mod after the toggle
+message SetHytaleModEnabledResponse {
+  HytaleMod mod = 1;
+}
+
+// Mod file to delete
+message DeleteHytaleModRequest {
+  string server_id = 1;
+  string file_name = 2;
+  // Which copy: true deletes from mods/, false from mods_disabled/
+  bool enabled = 3;
+}
+
+// Empty deletion response
+message DeleteHytaleModResponse {}

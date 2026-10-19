@@ -11,6 +11,7 @@ import (
 	"github.com/discohaus/discopanel/internal/alias"
 	models "github.com/discohaus/discopanel/internal/db"
 	"github.com/discohaus/discopanel/pkg/config"
+	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 	"github.com/discohaus/discopanel/pkg/protometa"
 	"google.golang.org/protobuf/proto"
@@ -35,6 +36,10 @@ func (c *Client) DesiredConfigHash(server *v1.Server, serverConfig *v1.ServerPro
 		w("env", e)
 	}
 
+	// Hytale binds UDP instead of the game and RCON TCP ports
+	if minecraft.IsHytale(server.ModLoader) {
+		w("game", "hytale")
+	}
 	useProxy := len(server.ProxyHostnames) > 0
 	w("port", strconv.Itoa(int(server.Port)), strconv.Itoa(models.InContainerPort(server)), strconv.FormatBool(useProxy))
 	for _, p := range server.AdditionalPorts {

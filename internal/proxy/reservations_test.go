@@ -197,3 +197,38 @@ func TestServerProxiedNetRequestsCatchAll(t *testing.T) {
 		t.Fatalf("want one request without catch all, got %d", len(reqs))
 	}
 }
+
+func TestHytaleNetRequests(t *testing.T) {
+	m := &Manager{}
+	owner := NetOwner{Kind: OwnerServer, ID: "h1"}
+	reqs := HytaleNetRequests(5520, nil, false)
+	if len(reqs) != 2 {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	transports := map[v1.NetworkTransport]bool{}
+	for _, req := range reqs {
+		res, err := m.reservationFromRequest(owner, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Kind != kindExclusive || res.Port != 5520 {
+			t.Errorf("reservation = %+v", res)
+		}
+		transports[res.Transport] = true
+		// A Minecraft game port or another Hytale port on the number collides
+		for _, other := range []Reservation{exclusive(5520, overTCP), exclusive(5520, overUDP)} {
+			if other.Transport == res.Transport && !reservationsConflict(&res, &other) {
+				t.Errorf("%v did not collide", res.Transport)
+			}
+		}
+	}
+	if !transports[overTCP] || !transports[overUDP] {
+		t.Errorf("transports = %v, the number must be held on both", transports)
+	}
+	// No RCON shadow port, Hytale has no RCON
+	for _, r := range HytaleNetRequests(5520, []*v1.NetworkPort{{HostPort: 8080, ContainerPort: 8080, Protocol: tcp}}, false) {
+		if r.Port == 5530 {
+			t.Error("rcon shadow port reserved for a Hytale server")
+		}
+	}
+}

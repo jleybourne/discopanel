@@ -50,6 +50,7 @@ type LogStreamer struct {
 	maxEntries  int
 	subscribers map[string]map[chan *v1.LogEntry]bool // key -> set of subscriber channels
 	subMu       sync.RWMutex
+	observer    func(key, line string)
 }
 
 // NewLogStreamer creates a new log streamer
@@ -85,6 +86,13 @@ func (ls *LogStreamer) getOrCreateStream(key string) *LogStream {
 	}
 	ls.streams[key] = stream
 	return stream
+}
+
+// Registers a callback for every container line, set before streaming starts
+func (ls *LogStreamer) SetLineObserver(fn func(key, line string)) {
+	ls.mu.Lock()
+	ls.observer = fn
+	ls.mu.Unlock()
 }
 
 // Attaches a container follow to the key
@@ -269,6 +277,12 @@ func (ls *LogStreamer) deliverLine(stream *LogStream, gen int, line string) bool
 	stream.mu.Unlock()
 
 	ls.broadcast(stream.key, entry)
+	ls.mu.RLock()
+	observe := ls.observer
+	ls.mu.RUnlock()
+	if observe != nil {
+		observe(stream.key, line)
+	}
 	return false
 }
 

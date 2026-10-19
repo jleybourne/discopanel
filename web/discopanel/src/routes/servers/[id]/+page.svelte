@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { serversStore } from '$lib/stores/servers';
@@ -43,7 +43,7 @@
 		GetServerRequestSchema,
 		DeleteServerRequestSchema
 	} from '$lib/proto/discopanel/v1/server_pb';
-	import { canStop, canRestart } from '$lib/server-status';
+	import { canStop, canRestart, isUp } from '$lib/server-status';
 	import { runServerAction, type ServerOp } from '$lib/server-actions';
 	import { loaderDisplayName } from '$lib/stores/loaders';
 	import { formatDate } from '$lib/utils/time';
@@ -62,6 +62,13 @@
 	import ServerRouting from '$lib/components/server-routing.svelte';
 	import ServerTasks from '$lib/components/server-tasks.svelte';
 	import ServerModules from '$lib/components/server/ServerModules.svelte';
+	import HytaleSignInCard from '$lib/components/hytale/hytale-sign-in-card.svelte';
+	import HytaleStatusPanel from '$lib/components/hytale/hytale-status-panel.svelte';
+	import HytaleConnectPanel from '$lib/components/hytale/hytale-connect-panel.svelte';
+	import HytaleSettings from '$lib/components/hytale/hytale-settings.svelte';
+	import HytaleMods from '$lib/components/hytale/hytale-mods.svelte';
+	import { hytaleStatusLabel } from '$lib/components/hytale/hytale-status';
+	import { isHytale, patchlineLabel } from '$lib/game';
 
 	const DELETE_WARNING =
 		'This permanently stops and removes the container, deletes all server files and the world, and removes every mod and property.\nThis cannot be undone.';
@@ -79,6 +86,9 @@
 	] as const;
 	type TabKey = (typeof TABS)[number]['key'];
 
+	// Minecraft-only tabs: hostname routing, server.properties, MC modules
+	const HYTALE_HIDDEN: TabKey[] = ['modules', 'network', 'properties'];
+
 	// Tabs that manage their own height and inner scrolling
 	const FILL_TABS: TabKey[] = ['console', 'files', 'mods', 'properties', 'settings'];
 
@@ -94,11 +104,14 @@
 	let now = $state(new Date());
 	let tabPane = $state<HTMLDivElement | null>(null);
 
+	let hytale = $derived(isHytale(server));
+	let tabs = $derived(hytale ? TABS.filter((t) => !HYTALE_HIDDEN.includes(t.key)) : TABS);
+
 	let activeTab = $derived.by<TabKey>(() => {
 		let requested = page.url.searchParams.get('tab');
 		// Old configuration links stay valid
 		if (requested === 'config') requested = 'properties';
-		return (TABS.find((t) => t.key === requested)?.key ?? 'overview') as TabKey;
+		return (tabs.find((t) => t.key === requested)?.key ?? 'overview') as TabKey;
 	});
 
 	// Fresh tab always opens scrolled to the top
@@ -199,13 +212,17 @@
 			const request = create(GetServerRequestSchema, { id: requestedId });
 			const callOptions = skipLoading ? silentCallOptions : undefined;
 			const response = await rpcClient.server.getServer(request, callOptions);
-			if (response.server && serverId === requestedId) {
-				server = response.server;
-				loadError = null;
-				serversStore.updateServer(server);
+			if (serverId !== requestedId) return;
+			if (!response.server) {
+				server = null;
 				loading = false;
-				void loadModulePrompts();
+				return;
 			}
+			server = response.server;
+			loadError = null;
+			serversStore.updateServer(server);
+			loading = false;
+			void loadModulePrompts();
 		} catch (error) {
 			if (serverId !== requestedId) return;
 			// Deleted elsewhere: drop the stale page instead of showing it forever
@@ -267,9 +284,15 @@
 	let pendingAction = $state<ServerOp | null>(null);
 	let confirmActionOpen = $state(false);
 
+	// Hytale up with no join line matched yet: players may be connected
+	let playersUnknown = $derived(
+		server !== null && hytale && isUp(server.status) && !server.hytale?.playersKnown
+	);
+
 	function requestAction(action: ServerOp) {
 		if (!server) return;
 		const quietlyIdle =
+			!playersUnknown &&
 			(server.playersOnline ?? 0) === 0 &&
 			(action === 'stop' || action === 'restart') &&
 			server.status !== ServerStatus.PROVISIONING;
@@ -285,8 +308,9 @@
 	let confirmCopy = $derived.by(() => {
 		const name = server?.name ?? 'this server';
 		const players = server?.playersOnline ?? 0;
-		const kicked =
-			players > 0
+		const kicked = playersUnknown
+			? 'Players may be connected and will be disconnected.'
+			: players > 0
 				? `${players} player${players === 1 ? ' is' : 's are'} online and will be disconnected.`
 				: '';
 		switch (pendingAction) {
@@ -331,6 +355,11 @@
 			);
 			serversStore.removeServer(server.id);
 			notify.success('Server deleted');
+			// Unmount the tabs first so an unsaved-changes guard cannot hold
+			// the user on a server that no longer exists
+			server = null;
+			loading = true;
+			await tick();
 			goto(resolve('/servers'));
 		} catch (error) {
 			notify.error(error instanceof Error ? error.message : 'Failed to delete server');
@@ -381,7 +410,7 @@
 	{@const srv = server}
 	{@const fillTab = FILL_TABS.includes(activeTab)}
 	<div class="flex min-h-0 flex-1 flex-col">
-		<TabRail tabs={TABS} value={activeTab} onValueChange={setTab}>
+		<TabRail {tabs} value={activeTab} onValueChange={setTab}>
 			{#snippet tab(t)}
 				{t.label}
 				{#if t.key === 'modules' && modulePrompts.length > 0}
@@ -395,50 +424,73 @@
 						<div class="min-w-0">
 							<div class="flex flex-wrap items-center gap-2.5">
 								<h1 class="truncate text-xl font-semibold tracking-tight">{srv.name}</h1>
-								<StatusBadge status={srv.status} />
-							</div>
-							<div
-								class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground"
-							>
-								<span>{srv.mcVersion}</span>
-								{#if srv.slpAvailable && srv.serverVersion && srv.serverVersion !== srv.mcVersion}
-									<span>·</span>
-									<span title="protocol {srv.protocolVersion}">
-										running {srv.serverVersion}
+								<StatusBadge status={srv.status} label={hytaleStatusLabel(srv) ?? ''} />
+								{#if hytale}
+									<span
+										class="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+									>
+										Hytale
 									</span>
 								{/if}
-								{#if $loaderDisplayName(srv.modLoader)}
-									<span>·</span>
-									<span>{$loaderDisplayName(srv.modLoader)}</span>
-								{/if}
-								{#if modpackUpdatePending(srv)}
-									<button
-										type="button"
-										class="inline-flex items-center text-status-busy/80 transition-colors hover:text-status-busy"
-										title="Modpack update available: {srv.modpackUpdateVersionName}"
-										aria-label="Modpack update available"
-										onclick={openModpackSettings}
-									>
-										<CircleArrowUp class="size-3.5" />
-									</button>
-								{/if}
-								{#if srv.javaVersion}
-									<span>·</span>
-									{@const pinnedJava = Number(/^java(\d+)/.exec(srv.dockerImage ?? '')?.[1] ?? 0)}
-									{#if pinnedJava && pinnedJava !== srv.javaVersion}
-										<span
-											class="text-status-busy"
-											title="The runtime image is pinned to Java {pinnedJava}, but this Minecraft version wants Java {srv.javaVersion}. Clear the Docker image in Settings to use the recommended runtime."
-										>
-											Java {pinnedJava} (wants {srv.javaVersion})
-										</span>
-									{:else}
-										<span>Java {pinnedJava || srv.javaVersion}</span>
-									{/if}
-								{/if}
-								<span>·</span>
-								<span>created {formatDate(srv.createdAt)}</span>
 							</div>
+							{#if hytale}
+								<div
+									class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground"
+								>
+									<span>Hytale {srv.mcVersion || 'not installed yet'}</span>
+									<span>·</span>
+									<span>{patchlineLabel(srv.hytale?.patchline).toLowerCase()} channel</span>
+									<span>·</span>
+									<span>Java {srv.javaVersion || 25}</span>
+									<span>·</span>
+									<span>UDP {srv.port}</span>
+									<span>·</span>
+									<span>created {formatDate(srv.createdAt)}</span>
+								</div>
+							{:else}
+								<div
+									class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground"
+								>
+									<span>{srv.mcVersion}</span>
+									{#if srv.slpAvailable && srv.serverVersion && srv.serverVersion !== srv.mcVersion}
+										<span>·</span>
+										<span title="protocol {srv.protocolVersion}">
+											running {srv.serverVersion}
+										</span>
+									{/if}
+									{#if $loaderDisplayName(srv.modLoader)}
+										<span>·</span>
+										<span>{$loaderDisplayName(srv.modLoader)}</span>
+									{/if}
+									{#if modpackUpdatePending(srv)}
+										<button
+											type="button"
+											class="inline-flex items-center text-status-busy/80 transition-colors hover:text-status-busy"
+											title="Modpack update available: {srv.modpackUpdateVersionName}"
+											aria-label="Modpack update available"
+											onclick={openModpackSettings}
+										>
+											<CircleArrowUp class="size-3.5" />
+										</button>
+									{/if}
+									{#if srv.javaVersion}
+										<span>·</span>
+										{@const pinnedJava = Number(/^java(\d+)/.exec(srv.dockerImage ?? '')?.[1] ?? 0)}
+										{#if pinnedJava && pinnedJava !== srv.javaVersion}
+											<span
+												class="text-status-busy"
+												title="The runtime image is pinned to Java {pinnedJava}, but this Minecraft version wants Java {srv.javaVersion}. Clear the Docker image in Settings to use the recommended runtime."
+											>
+												Java {pinnedJava} (wants {srv.javaVersion})
+											</span>
+										{:else}
+											<span>Java {pinnedJava || srv.javaVersion}</span>
+										{/if}
+									{/if}
+									<span>·</span>
+									<span>created {formatDate(srv.createdAt)}</span>
+								</div>
+							{/if}
 							{#if srv.description}
 								<p class="mt-1 line-clamp-1 text-xs text-muted-foreground/80">
 									{srv.description}
@@ -480,7 +532,11 @@
 								{:else}
 									<Square class="size-4" />
 								{/if}
-								{srv.status === ServerStatus.PROVISIONING ? 'Cancel' : 'Stop'}
+								{srv.status === ServerStatus.PROVISIONING
+									? hytale
+										? 'Cancel start'
+										: 'Cancel'
+									: 'Stop'}
 							</Button>
 						{/if}
 						{#if !transitionalLabel && canRestart(srv.status)}
@@ -549,6 +605,11 @@
 		{#if fillTab}
 			<div class="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col p-4 sm:p-6 2xl:max-w-7xl">
 				{#if activeTab === 'console'}
+					{#if hytale && srv.hytale?.signIn}
+						<div class="mb-4 shrink-0">
+							<HytaleSignInCard signIn={srv.hytale.signIn} />
+						</div>
+					{/if}
 					<ServerConsole {server} active={true} />
 				{:else if activeTab === 'files'}
 					<div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
@@ -558,17 +619,37 @@
 						<ServerBackups {server} active={true} />
 					</div>
 				{:else if activeTab === 'mods'}
-					<ServerMods {server} active={true} />
+					{#if hytale}
+						<HytaleMods {server} active={true} />
+					{:else}
+						<ServerMods {server} active={true} />
+					{/if}
 				{:else if activeTab === 'properties'}
 					<ServerProperties {server} onUpdate={loadServer} />
 				{:else if activeTab === 'settings'}
-					<ServerSettings {server} onUpdate={loadServer} />
+					{#if hytale}
+						<HytaleSettings {server} onUpdate={loadServer} />
+					{:else}
+						<ServerSettings {server} onUpdate={loadServer} />
+					{/if}
 				{/if}
 			</div>
 		{:else}
 			<div bind:this={tabPane} class="min-h-0 flex-1 overflow-y-auto">
 				<div class="mx-auto w-full max-w-6xl p-4 sm:p-6 2xl:max-w-7xl">
-					{#if activeTab === 'overview'}
+					{#if activeTab === 'overview' && hytale}
+						<div class="space-y-4">
+							{#if srv.hytale?.signIn}
+								<HytaleSignInCard signIn={srv.hytale.signIn} />
+							{/if}
+							<div class="grid gap-4 lg:grid-cols-3">
+								<HytaleStatusPanel {server} {now} onUpdate={loadServer} />
+								<HytaleConnectPanel {server} />
+								<ResourcesPanel {server} showTps={false} />
+							</div>
+							<ServerMetricsCharts {server} />
+						</div>
+					{:else if activeTab === 'overview'}
 						<div class="space-y-4">
 							<div class="grid gap-4 lg:grid-cols-3">
 								<StatusPanel {server} {now} />

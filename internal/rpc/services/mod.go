@@ -164,7 +164,7 @@ func (s *ModService) ListMods(ctx context.Context, req *connect.Request[v1.ListM
 	msg := req.Msg
 
 	// Get server to find data path and mod loader
-	server, err := getServer(ctx, s.store, msg.ServerId)
+	server, err := getMinecraftServer(ctx, s.store, msg.ServerId, "the Minecraft mod manager")
 	if err != nil {
 		return nil, err
 	}
@@ -332,7 +332,7 @@ func (s *ModService) GetMod(ctx context.Context, req *connect.Request[v1.GetModR
 	msg := req.Msg
 
 	// Get server to validate and find mod
-	server, err := getServer(ctx, s.store, msg.ServerId)
+	server, err := getMinecraftServer(ctx, s.store, msg.ServerId, "the Minecraft mod manager")
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +363,7 @@ func (s *ModService) ImportUploadedMod(ctx context.Context, req *connect.Request
 	}
 
 	// Get server to find data path and mod loader
-	server, err := getServer(ctx, s.store, msg.ServerId)
+	server, err := getMinecraftServer(ctx, s.store, msg.ServerId, "the Minecraft mod manager")
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +395,7 @@ func (s *ModService) InstallMod(ctx context.Context, req *connect.Request[v1.Ins
 	if msg.ModId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("mod_id is required"))
 	}
-	server, err := getServer(ctx, s.store, msg.ServerId)
+	server, err := getMinecraftServer(ctx, s.store, msg.ServerId, "the Minecraft mod manager")
 	if err != nil {
 		return nil, err
 	}
@@ -520,7 +520,7 @@ func (s *ModService) UpdateMod(ctx context.Context, req *connect.Request[v1.Upda
 	msg := req.Msg
 
 	// Get server to find mod path
-	server, err := getServer(ctx, s.store, msg.ServerId)
+	server, err := getMinecraftServer(ctx, s.store, msg.ServerId, "the Minecraft mod manager")
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +589,7 @@ func (s *ModService) DeleteMod(ctx context.Context, req *connect.Request[v1.Dele
 	msg := req.Msg
 
 	// Get server to find file path
-	server, err := getServer(ctx, s.store, msg.ServerId)
+	server, err := getMinecraftServer(ctx, s.store, msg.ServerId, "the Minecraft mod manager")
 	if err != nil {
 		return nil, err
 	}

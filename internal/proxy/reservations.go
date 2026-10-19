@@ -10,6 +10,7 @@ import (
 
 	db "github.com/discohaus/discopanel/internal/db"
 	"github.com/discohaus/discopanel/internal/docker"
+	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 	"github.com/discohaus/discopanel/pkg/protometa"
 	"github.com/google/uuid"
@@ -368,6 +369,17 @@ func ServerDirectNetRequests(port int, additional []*v1.NetworkPort, proxyOn boo
 	return append(reqs, PortNetRequests(additional, nil, proxyOn)...)
 }
 
+// Builds reservation requests for a Hytale server. The game speaks UDP only,
+// the TCP twin keeps the number for this server alone so players are never
+// sent to a Minecraft server sharing it.
+func HytaleNetRequests(port int, additional []*v1.NetworkPort, proxyOn bool) []NetRequest {
+	reqs := []NetRequest{
+		{Port: port, Protocol: v1.ModuleProtocol_MODULE_PROTOCOL_UDP, Detail: "hytale game port"},
+		{Port: port, Protocol: v1.ModuleProtocol_MODULE_PROTOCOL_TCP, Detail: "hytale game port (reserved)"},
+	}
+	return append(reqs, PortNetRequests(additional, nil, proxyOn)...)
+}
+
 // Builds reservation requests for a proxied server
 func ServerProxiedNetRequests(hostnames []string, listenerPort int, additional []*v1.NetworkPort, proxyOn bool, catchAll bool) []NetRequest {
 	var reqs []NetRequest
@@ -484,7 +496,9 @@ func (m *Manager) reservationsLocked(ctx context.Context) ([]Reservation, error)
 		serversByID[s.Id] = s
 		owner := NetOwner{Kind: OwnerServer, ID: s.Id}
 		var reqs []NetRequest
-		if len(s.ProxyHostnames) > 0 {
+		if minecraft.IsHytale(s.ModLoader) && s.Port > 0 {
+			reqs = HytaleNetRequests(int(s.Port), s.AdditionalPorts, m.enabled)
+		} else if len(s.ProxyHostnames) > 0 {
 			listener := listenersByID[s.ProxyListenerId]
 			if listener == nil {
 				reqs = PortNetRequests(s.AdditionalPorts, s.ProxyHostnames, m.enabled)

@@ -49,6 +49,13 @@ service ServerService {
       action: ACTION_TYPE_READ
     };
   }
+  // Reports whether a host port is free for a server
+  rpc CheckPortAvailable(CheckPortAvailableRequest) returns (CheckPortAvailableResponse) {
+    option (discopanel.options.v1.perm) = {
+      resource: RESOURCE_TYPE_SERVERS
+      action: ACTION_TYPE_READ
+    };
+  }
   // Host physical memory and per-server allocations
   rpc GetHostMemory(GetHostMemoryRequest) returns (GetHostMemoryResponse) {
     option (discopanel.options.v1.perm) = {
@@ -283,6 +290,20 @@ message GetNextAvailablePortResponse {
   repeated UsedPort used_ports = 2;
 }
 
+// Port to check, server_id excludes that server's own claims
+message CheckPortAvailableRequest {
+  int32 port = 1;
+  ModuleProtocol protocol = 2;
+  string server_id = 3;
+}
+
+// Port check verdict
+message CheckPortAvailableResponse {
+  bool available = 1;
+  // Why the port is taken, empty when available
+  string reason = 2;
+}
+
 // Empty host memory request
 message GetHostMemoryRequest {}
 
@@ -321,6 +342,15 @@ message CreateServerRequest {
   repeated NetworkPort additional_ports = 17;
   DockerOverrides docker_overrides = 18;
   string world_upload_session_id = 21; // Uploaded world zip to import at create
+  HytaleCreateOptions hytale = 22; // Hytale only, mod_loader must be MOD_LOADER_HYTALE
+}
+
+// Hytale settings chosen at create
+message HytaleCreateOptions {
+  // Release channel, "release" or "pre-release"
+  string patchline = 1;
+  // MaxViewRadius in chunks, 0 keeps the server default
+  int32 max_view_radius = 2;
 }
 
 // Created server instance

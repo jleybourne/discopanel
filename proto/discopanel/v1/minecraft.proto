@@ -53,6 +53,8 @@ message ModLoaderInfo {
   ModLoader loader = 8;
   // Directory jars install into, mods or plugins, empty when none
   string mods_directory = 9;
+  // Game this loader hosts
+  discopanel.options.v1.Game game = 10;
 }
 
 // Empty loaders request

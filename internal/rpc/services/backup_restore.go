@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/discohaus/discopanel/pkg/files"
+	"github.com/discohaus/discopanel/pkg/hytale"
 )
 
 // How many pre-restore safety snapshots are kept per server
@@ -33,6 +34,30 @@ const preRestorePrefix = "pre-restore_"
 // corrupt or oversized backup fails before anything is changed, and the
 // swap is a series of same-filesystem renames that roll back on error.
 func restoreArchiveExact(ctx context.Context, archivePath, dataPath string) error {
+	return restoreArchive(ctx, archivePath, dataPath, isMinecraftWorld)
+}
+
+// Hytale keeps every world and all player data under universe/, which is
+// replaced as one unit like a Minecraft world dir. Both mod folders are
+// swapped too, so a restore brings back exactly which mods were enabled
+// instead of merging a disabled mod back into mods/.
+func restoreHytaleArchive(ctx context.Context, archivePath, dataPath string) error {
+	return restoreArchive(ctx, archivePath, dataPath, func(name, src string) bool {
+		switch name {
+		case hytale.UniverseDir, hytale.ModsDir, hytale.DisabledModsDir:
+			return true
+		}
+		return isMinecraftWorld(name, src)
+	})
+}
+
+// A top-level archive dir is a Minecraft world when it holds level.dat
+func isMinecraftWorld(_ string, src string) bool {
+	return isRegularFile(filepath.Join(src, "level.dat"))
+}
+
+// Shared restore, isWorld picks the top-level dirs swapped wholesale
+func restoreArchive(ctx context.Context, archivePath, dataPath string, isWorld func(name, src string) bool) error {
 	staging, err := os.MkdirTemp(dataPath, ".restore-*")
 	if err != nil {
 		return fmt.Errorf("failed to create restore staging dir: %w", err)
@@ -80,7 +105,7 @@ func restoreArchiveExact(ctx context.Context, archivePath, dataPath string) erro
 			continue
 		}
 		src := filepath.Join(extracted, name)
-		if !e.IsDir() || !isRegularFile(filepath.Join(src, "level.dat")) {
+		if !e.IsDir() || !isWorld(name, src) {
 			merges = append(merges, name)
 			continue
 		}

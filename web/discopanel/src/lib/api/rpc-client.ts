@@ -30,6 +30,7 @@ import { UploadService } from '$lib/proto/discopanel/v1/upload_pb';
 import { UserService } from '$lib/proto/discopanel/v1/user_pb';
 import { RoleService } from '$lib/proto/discopanel/v1/role_pb';
 import { ModuleService } from '$lib/proto/discopanel/v1/module_pb';
+import { HytaleService } from '$lib/proto/discopanel/v1/hytale_pb';
 
 // Bare backend reason for inline error surfaces
 export function rpcErrorMessage(error: unknown, fallback: string): string {
@@ -133,6 +134,7 @@ export class RpcClient {
 	public readonly user: Client<typeof UserService>;
 	public readonly role: Client<typeof RoleService>;
 	public readonly module: Client<typeof ModuleService>;
+	public readonly hytale: Client<typeof HytaleService>;
 
 	constructor() {
 		this.auth = createClient(AuthService, transport);
@@ -149,6 +151,7 @@ export class RpcClient {
 		this.user = createClient(UserService, transport);
 		this.role = createClient(RoleService, transport);
 		this.module = createClient(ModuleService, transport);
+		this.hytale = createClient(HytaleService, transport);
 	}
 }
 

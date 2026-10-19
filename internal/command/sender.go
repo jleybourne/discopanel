@@ -42,6 +42,7 @@ type Sender struct {
 	agent    ConsoleAgent
 	rec      *metrics.Recorder
 	streamer *logger.LogStreamer
+	observe  func(serverID, command string)
 }
 
 func NewSender(store *storage.Store, dockerClient *docker.Client, cfg *config.Config) *Sender {
@@ -55,6 +56,11 @@ func NewSender(store *storage.Store, dockerClient *docker.Client, cfg *config.Co
 // Wires agent hub after construction due to dependency order
 func (s *Sender) SetAgent(agent ConsoleAgent) {
 	s.agent = agent
+}
+
+// Sees every console command before it is sent, set before serving
+func (s *Sender) SetCommandObserver(fn func(serverID, command string)) {
+	s.observe = fn
 }
 
 // Wires ledger and console echo after construction
@@ -141,6 +147,9 @@ func (s *Sender) Run(ctx context.Context, serverID, cmd string, silent bool) (st
 		return "", err
 	}
 
+	if s.observe != nil {
+		s.observe(server.Id, cmd)
+	}
 	commandTime := time.Now()
 	if !silent && s.streamer != nil {
 		s.streamer.AddCommandEntry(server.Id, cmd, commandTime)

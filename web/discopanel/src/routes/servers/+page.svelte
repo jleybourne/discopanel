@@ -34,6 +34,7 @@
 		statusMeta
 	} from '$lib/server-status';
 	import { loaderDisplayName } from '$lib/stores/loaders';
+	import { isHytale } from '$lib/game';
 	import { formatUptime } from '$lib/utils/time';
 	import { runServerAction, type ServerOp } from '$lib/server-actions';
 	import { notify } from '$lib/stores/activity.svelte';
@@ -196,6 +197,7 @@
 	}
 
 	function connectionLabel(server: Server): string {
+		if (isHytale(server)) return `:${server.port}/udp`;
 		return routedAddresses(server).join(', ') || `:${server.port}`;
 	}
 </script>
@@ -309,8 +311,16 @@
 									<div
 										class="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground"
 									>
-										<span>{server.mcVersion}</span>
-										{#if server.modLoader !== ModLoader.VANILLA && $loaderDisplayName(server.modLoader)}
+										{#if isHytale(server)}
+											<span class="font-medium text-primary">Hytale</span>
+										{:else}
+											<span>Minecraft</span>
+										{/if}
+										{#if server.mcVersion}
+											<span>·</span>
+											<span>{server.mcVersion}</span>
+										{/if}
+										{#if !isHytale(server) && server.modLoader !== ModLoader.VANILLA && $loaderDisplayName(server.modLoader)}
 											<span>·</span>
 											<span>{$loaderDisplayName(server.modLoader)}</span>
 										{/if}

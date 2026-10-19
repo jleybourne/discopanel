@@ -14,9 +14,11 @@ import (
 
 	storage "github.com/discohaus/discopanel/internal/db"
 	"github.com/discohaus/discopanel/internal/docker"
+	"github.com/discohaus/discopanel/internal/hytaletracker"
 	"github.com/discohaus/discopanel/internal/metrics"
 	"github.com/discohaus/discopanel/pkg/config"
 	"github.com/discohaus/discopanel/pkg/files"
+	"github.com/discohaus/discopanel/pkg/hytale"
 	"github.com/discohaus/discopanel/pkg/logger"
 	"github.com/discohaus/discopanel/pkg/minecraft"
 	optionsv1 "github.com/discohaus/discopanel/pkg/proto/discopanel/options/v1"
@@ -36,6 +38,7 @@ type Provisioner struct {
 	log    *logger.Logger
 	rec    *metrics.Recorder
 	sink   ProgressSink
+	hytale *hytaletracker.Tracker
 
 	mu     sync.Mutex
 	active map[string]*sync.Mutex // Per-server provisioning locks
@@ -109,6 +112,11 @@ func (p *Provisioner) Ensure(ctx context.Context, server *v1.Server, cfg *v1.Ser
 
 	if err := os.MkdirAll(server.DataPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create server data directory: %w", err)
+	}
+
+	// Hytale has its own downloader and no Minecraft config files
+	if minecraft.IsHytale(server.ModLoader) {
+		return p.ensureHytale(ctx, server, cfg)
 	}
 
 	// Free gate belongs before any multi gigabyte install
@@ -241,7 +249,7 @@ func (p *Provisioner) snapshotWorld(server *v1.Server) {
 	if p.cfg == nil || p.cfg.Storage.BackupDir == "" {
 		return
 	}
-	worldDirs, err := files.FindWorldDirs(server.DataPath)
+	worldDirs, err := hytale.ServerWorldDirs(server.DataPath, server.ModLoader)
 	if err != nil || len(worldDirs) == 0 {
 		return
 	}

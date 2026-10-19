@@ -50,6 +50,7 @@
 		Moon
 	} from '@lucide/svelte';
 	import { type Server, ServerStatus } from '$lib/proto/discopanel/v1/storage_pb';
+	import { isHytale } from '$lib/game';
 	import type { GetProxyStatusResponse } from '$lib/proto/discopanel/v1/proxy_pb';
 
 	let servers = $derived($serversStore);
@@ -186,7 +187,9 @@
 				{server.lastStarted
 					? `last online ${formatRelative(server.lastStarted, now)}`
 					: 'never started'}
-				· {server.mcVersion}
+				· {isHytale(server)
+					? `Hytale${server.mcVersion ? ` ${server.mcVersion}` : ''}`
+					: server.mcVersion}
 			</p>
 		</div>
 		<div class="relative z-10 shrink-0">

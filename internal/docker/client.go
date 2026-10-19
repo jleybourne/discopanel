@@ -18,7 +18,9 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/discohaus/discopanel/internal/alias"
 	models "github.com/discohaus/discopanel/internal/db"
+	"github.com/discohaus/discopanel/pkg/hytale"
 	"github.com/discohaus/discopanel/pkg/logger"
+	"github.com/discohaus/discopanel/pkg/minecraft"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 	"github.com/discohaus/discopanel/pkg/protometa"
 	"github.com/discohaus/discopanel/pkg/utils"
@@ -110,6 +112,10 @@ type Client struct {
 	// Default log driver detected from the engine, see DefaultLogDriver
 	logDriverMu   sync.Mutex
 	autoLogDriver string
+
+	// Cached docker host CPU architecture
+	archMu sync.Mutex
+	arch   string
 }
 
 // Registers panel-side health source for container status
@@ -156,6 +162,21 @@ func (c *Client) Close() error {
 
 // Get the docker client instance from the client object
 // Version of the daemon the client talks to
+// Docker host CPU architecture, e.g. x86_64 or aarch64
+func (c *Client) HostArch(ctx context.Context) (string, error) {
+	c.archMu.Lock()
+	defer c.archMu.Unlock()
+	if c.arch != "" {
+		return c.arch, nil
+	}
+	info, err := c.docker.Info(ctx)
+	if err != nil {
+		return "", err
+	}
+	c.arch = info.Architecture
+	return c.arch, nil
+}
+
 func (c *Client) ServerVersion(ctx context.Context) (string, error) {
 	v, err := c.docker.ServerVersion(ctx)
 	if err != nil {
@@ -365,10 +386,16 @@ func (c *Client) CreateContainer(ctx context.Context, server *v1.Server, serverC
 
 	c.log.Debug("Creating container for server %s with image %s", server.Id, imageName)
 
+	// Hytale speaks QUIC on one UDP port and has no RCON
+	isHytale := minecraft.IsHytale(server.ModLoader)
+
 	// Build exposed ports
 	exposedPorts := nat.PortSet{
 		nat.Port(fmt.Sprintf("%d/tcp", containerPort)):   struct{}{},
 		nat.Port(fmt.Sprintf("%d/tcp", DefaultRCONPort)): struct{}{},
+	}
+	if isHytale {
+		exposedPorts = nat.PortSet{nat.Port(fmt.Sprintf("%d/udp", hytale.ContainerPort)): struct{}{}}
 	}
 	for _, port := range server.AdditionalPorts {
 		protocol := protometa.Name(models.TransportOf(port.GetProtocol()))
@@ -377,7 +404,11 @@ func (c *Client) CreateContainer(ctx context.Context, server *v1.Server, serverC
 
 	// Build port bindings
 	portBindings := nat.PortMap{}
-	if !useProxy {
+	if isHytale {
+		portBindings[nat.Port(fmt.Sprintf("%d/udp", hytale.ContainerPort))] = []nat.PortBinding{
+			{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", server.Port)},
+		}
+	} else if !useProxy {
 		// Bind game port to host
 		portBindings[nat.Port(fmt.Sprintf("%d/tcp", containerPort))] = []nat.PortBinding{
 			{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", server.Port)},

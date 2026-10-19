@@ -1075,7 +1075,7 @@ func (s *ProxyService) GetNetworkTopology(ctx context.Context, req *connect.Requ
 func (s *ProxyService) UpdateServerRouting(ctx context.Context, req *connect.Request[v1.UpdateServerRoutingRequest]) (*connect.Response[v1.UpdateServerRoutingResponse], error) {
 	msg := req.Msg
 
-	server, err := getServer(ctx, s.store, msg.ServerId)
+	server, err := getMinecraftServer(ctx, s.store, msg.ServerId, "hostname routing")
 	if err != nil {
 		return nil, err
 	}
