@@ -424,7 +424,17 @@
 								{/if}
 								{#if srv.javaVersion}
 									<span>·</span>
-									<span>Java {srv.javaVersion}</span>
+									{@const pinnedJava = Number(/^java(\d+)/.exec(srv.dockerImage ?? '')?.[1] ?? 0)}
+									{#if pinnedJava && pinnedJava !== srv.javaVersion}
+										<span
+											class="text-status-busy"
+											title="The runtime image is pinned to Java {pinnedJava}, but this Minecraft version wants Java {srv.javaVersion}. Clear the Docker image in Settings to use the recommended runtime."
+										>
+											Java {pinnedJava} (wants {srv.javaVersion})
+										</span>
+									{:else}
+										<span>Java {pinnedJava || srv.javaVersion}</span>
+									{/if}
 								{/if}
 								<span>·</span>
 								<span>created {formatDate(srv.createdAt)}</span>

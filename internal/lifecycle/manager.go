@@ -20,6 +20,7 @@ import (
 	"github.com/discohaus/discopanel/internal/proxy"
 	"github.com/discohaus/discopanel/pkg/config"
 	"github.com/discohaus/discopanel/pkg/events"
+	"github.com/discohaus/discopanel/pkg/javaversions"
 	"github.com/discohaus/discopanel/pkg/logger"
 	v1 "github.com/discohaus/discopanel/pkg/proto/discopanel/v1"
 	"github.com/discohaus/discopanel/pkg/protometa"
@@ -421,6 +422,13 @@ func (m *Manager) start(ctx context.Context, serverID string) error {
 	if java := int32(result.JavaMajor); java != server.JavaVersion {
 		server.JavaVersion = java
 		resolved["java_version"] = server.JavaVersion
+	}
+	// A pinned runtime image wins over the resolved Java (DesiredImage), so
+	// say so when they disagree: mods that cap their Java version crash on
+	// a newer runtime while Server info shows the required one
+	if pinned := javaversions.TagMajor(server.DockerImage); pinned > 0 && result.JavaMajor > 0 && pinned != result.JavaMajor {
+		m.console(server.Id, "warning: runtime image is pinned to Java %d but Minecraft %s wants Java %d. Clear the Docker image in Settings to use the recommended runtime.", pinned, server.McVersion, result.JavaMajor)
+		m.log.Warn("lifecycle: %s pinned to Java %d, resolved Java %d", server.Name, pinned, result.JavaMajor)
 	}
 	installed := ""
 	if result.Modpack != nil {
