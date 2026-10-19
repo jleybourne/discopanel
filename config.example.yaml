@@ -41,7 +41,7 @@ docker:
   #   your.label.key: "your_label_value"
   #   other.label.key: "other_label_value"
   labels: '{ }'
-  log_driver: "local" # docker log driver (local, json-file)
+  log_driver: "" # docker log driver (local, json-file); empty picks local, or json-file on Podman
 
 # Storage configuration
 storage:
