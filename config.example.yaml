@@ -131,6 +131,7 @@ proxy:
 # Minecraft server global configuration defaults
 minecraft:
   reset_global: false
+  max_total_memory_mb: 0 # Cap on memory allocated across all servers and modules in MB, 0 is unlimited. Settings > Resources overrides it
   # Specifying any of these settings overrides the global config default when it is first made, or the existing one if `reset_global` is `true`.
   # The values below are the panel's own defaults (kept in sync by internal/db/example_config_test.go): delete a line to keep the default, change it to override.
   global_config:

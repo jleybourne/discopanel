@@ -78,6 +78,9 @@ type ServerService struct {
 
 	// Encoded server icons cached by file identity
 	favicons minecraft.FaviconCache
+
+	// Cap on memory across servers and modules, shared with modules
+	quota *MemoryQuota
 }
 
 // Normalizes additional ports, proxied ones may route
@@ -171,7 +174,7 @@ func networkPortsEqual(a, b []*v1.NetworkPort) bool {
 }
 
 // NewServerService creates a new server service
-func NewServerService(store *storage.Store, docker *docker.Client, sender *command.Sender, config *config.Config, proxy *proxy.Manager, lifecycleManager *lifecycle.Manager, authManager *auth.Manager, enforcer *rbac.Enforcer, logStreamer *logger.LogStreamer, metricsCollector *metrics.Collector, moduleManager *module.Manager, bus *events.Bus, uploadManager *transfer.UploadManager, completion *command.Completion, rec *metrics.Recorder, log *logger.Logger) *ServerService {
+func NewServerService(store *storage.Store, docker *docker.Client, sender *command.Sender, config *config.Config, proxy *proxy.Manager, lifecycleManager *lifecycle.Manager, authManager *auth.Manager, enforcer *rbac.Enforcer, logStreamer *logger.LogStreamer, metricsCollector *metrics.Collector, moduleManager *module.Manager, bus *events.Bus, uploadManager *transfer.UploadManager, completion *command.Completion, rec *metrics.Recorder, quota *MemoryQuota, log *logger.Logger) *ServerService {
 	return &ServerService{
 		store:            store,
 		docker:           docker,
@@ -189,6 +192,7 @@ func NewServerService(store *storage.Store, docker *docker.Client, sender *comma
 		bus:              bus,
 		uploadManager:    uploadManager,
 		completion:       completion,
+		quota:            quota,
 	}
 }
 
@@ -568,6 +572,13 @@ func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
+	// Memory cap holds this server's share until the row persists
+	releaseMemory, err := s.quota.reserveServer(ctx, server, -1)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseMemory()
+
 	// When using proxy, set the ports correctly
 	if len(server.ProxyHostnames) > 0 && proxyListenerID != "" {
 		server.Port = int32(storage.MinecraftDefaultPort)
@@ -661,6 +672,8 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 
 	// Check if container recreation is needed
 	needsRecreation := false
+	memoryChanged := false
+	originalAllocation := allocatedMemoryMB(server)
 	originalMemory := server.Memory
 	originalModLoader := server.ModLoader
 	originalMCVersion := server.McVersion
@@ -707,9 +720,7 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 
 		if server.Memory != originalMemory || server.MemoryMin != originalMemoryMin || server.MemoryMax != originalMemoryMax {
 			needsRecreation = true
-			if err := s.store.SyncServerPropertiesWithServer(ctx, server); err != nil {
-				s.log.Error("Failed to sync server config memory: %v", err)
-			}
+			memoryChanged = true
 		}
 	}
 	if msg.ModLoader != v1.ModLoader_MOD_LOADER_UNSPECIFIED && msg.ModLoader != originalModLoader {
@@ -769,6 +780,13 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 		}
 	}
 
+	// Raising the allocation must fit the memory cap
+	releaseMemory, err := s.quota.reserveServer(ctx, server, originalAllocation)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseMemory()
+
 	// Handle modpack version update
 	if msg.ModpackId != "" {
 		serverConfig := s.serverPropertiesOrDefault(ctx, server.Id)
@@ -810,6 +828,13 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update server"))
 	}
 	netClaim.Confirm()
+
+	// Heap sizing reaches properties only once the change is saved
+	if memoryChanged {
+		if err := s.store.SyncServerPropertiesWithServer(ctx, server); err != nil {
+			s.log.Error("Failed to sync server config memory: %v", err)
+		}
+	}
 
 	// Reconcile keeps routes matching the saved shape
 	syncRoutes(ctx, s.proxy, s.log, "after server update")
@@ -1434,22 +1459,39 @@ func (s *ServerService) GetNextAvailablePort(ctx context.Context, req *connect.R
 	}), nil
 }
 
-// Reports host physical memory and per-server reservations
-func (s *ServerService) GetHostMemory(ctx context.Context, req *connect.Request[v1.GetHostMemoryRequest]) (*connect.Response[v1.GetHostMemoryResponse], error) {
-	var totalMB int64
-	if s.docker != nil {
-		if dockerClient := s.docker.GetDockerClient(); dockerClient != nil {
-			if info, err := dockerClient.Info(ctx); err == nil {
-				totalMB = info.MemTotal / 1024 / 1024
-			} else {
-				s.log.Error("Failed to read docker host info: %v", err)
-			}
-		}
+// Physical memory on the docker host in MB, 0 when unknown
+func (s *ServerService) hostTotalMB(ctx context.Context) int64 {
+	if s.docker == nil {
+		return 0
 	}
+	dockerClient := s.docker.GetDockerClient()
+	if dockerClient == nil {
+		return 0
+	}
+	info, err := dockerClient.Info(ctx)
+	if err != nil {
+		s.log.Error("Failed to read docker host info: %v", err)
+		return 0
+	}
+	return info.MemTotal / 1024 / 1024
+}
 
+// Reports host physical memory, per-server reservations and the memory cap
+func (s *ServerService) GetHostMemory(ctx context.Context, req *connect.Request[v1.GetHostMemoryRequest]) (*connect.Response[v1.GetHostMemoryResponse], error) {
 	servers, err := s.store.ListServers(ctx)
 	if err != nil {
 		s.log.Error("Failed to list servers: %v", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get host memory"))
+	}
+
+	capMB, _, err := s.quota.limit(ctx)
+	if err != nil {
+		s.log.Error("Failed to load memory quota: %v", err)
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get host memory"))
+	}
+	modulesMB, err := s.quota.modulesMB(ctx)
+	if err != nil {
+		s.log.Error("Failed to list modules: %v", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get host memory"))
 	}
 
@@ -1458,13 +1500,16 @@ func (s *ServerService) GetHostMemory(ctx context.Context, req *connect.Request[
 		allocations = append(allocations, &v1.ServerMemoryAllocation{
 			ServerId:   server.Id,
 			ServerName: server.Name,
-			Memory:     int32(server.Memory),
+			Memory:     int32(allocatedMemoryMB(server)),
 		})
 	}
 
 	return connect.NewResponse(&v1.GetHostMemoryResponse{
-		TotalMb:     totalMB,
+		TotalMb:     s.hostTotalMB(ctx),
 		Allocations: allocations,
+		MaxTotalMb:  capMB,
+		CapExempt:   s.quota.exempt(ctx),
+		ModulesMb:   modulesMB,
 	}), nil
 }
 

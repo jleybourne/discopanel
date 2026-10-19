@@ -238,9 +238,15 @@
 	guardUnsavedChanges(() => dirty && !saving);
 
 	let hostTotalMb = $state(0);
+	let memoryCapMb = $state(0);
+	let memoryCapExempt = $state(false);
+	let modulesMb = $state(0);
 	let memoryAllocations = $state<{ serverId: string; memory: number }[]>([]);
 	let occupiedMb = $derived(
-		memoryAllocations.filter((a) => a.serverId !== server.id).reduce((sum, a) => sum + a.memory, 0)
+		modulesMb +
+			memoryAllocations
+				.filter((a) => a.serverId !== server.id)
+				.reduce((sum, a) => sum + a.memory, 0)
 	);
 
 	let selectableLoaders = $derived(
@@ -295,6 +301,9 @@
 				portData?.usedPorts?.filter((p) => !ownExtra.has(p.port)).map((p) => [p.port, true]) ?? []
 			);
 			hostTotalMb = Number(hostMemory.totalMb);
+			memoryCapMb = Number(hostMemory.maxTotalMb);
+			memoryCapExempt = hostMemory.capExempt;
+			modulesMb = Number(hostMemory.modulesMb);
 			memoryAllocations = hostMemory.allocations.map((a) => ({
 				serverId: a.serverId,
 				memory: a.memory
@@ -611,6 +620,9 @@
 							bind:memoryMax={formData.memoryMax}
 							totalMb={hostTotalMb}
 							{occupiedMb}
+							capMb={memoryCapMb}
+							capExempt={memoryCapExempt}
+							overrideMb={Number(formData.dockerOverrides?.memoryLimit ?? 0)}
 							disabled={saving}
 							dirty={fieldDirty('memory') || fieldDirty('memoryMin') || fieldDirty('memoryMax')}
 						/>
