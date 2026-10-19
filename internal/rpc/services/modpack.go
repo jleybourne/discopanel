@@ -48,19 +48,21 @@ var _ discopanelv1connect.ModpackServiceHandler = (*ModpackService)(nil)
 
 // Implements the Modpack service
 type ModpackService struct {
-	store         *storage.Store
-	config        *config.Config
-	log           *logger.Logger
-	uploadManager *transfer.UploadManager
+	store           *storage.Store
+	config          *config.Config
+	log             *logger.Logger
+	uploadManager   *transfer.UploadManager
+	downloadManager *transfer.DownloadManager
 }
 
 // Creates a new modpack service
-func NewModpackService(store *storage.Store, cfg *config.Config, uploadManager *transfer.UploadManager, log *logger.Logger) *ModpackService {
+func NewModpackService(store *storage.Store, cfg *config.Config, uploadManager *transfer.UploadManager, downloadManager *transfer.DownloadManager, log *logger.Logger) *ModpackService {
 	return &ModpackService{
-		store:         store,
-		config:        cfg,
-		log:           log,
-		uploadManager: uploadManager,
+		store:           store,
+		config:          cfg,
+		log:             log,
+		uploadManager:   uploadManager,
+		downloadManager: downloadManager,
 	}
 }
 
@@ -130,6 +132,7 @@ func (s *ModpackService) SearchModpacks(ctx context.Context, req *connect.Reques
 	for _, modpack := range modpacks {
 		modpack.IsFavorited = favorites[modpack.Id]
 	}
+	s.markPublicDownloads(ctx, modpacks)
 
 	return connect.NewResponse(&v1.SearchModpacksResponse{
 		Modpacks: modpacks,
@@ -148,6 +151,7 @@ func (s *ModpackService) GetModpack(ctx context.Context, req *connect.Request[v1
 
 	// Check if favorited
 	modpack.IsFavorited, _ = s.store.IsModpackFavorited(ctx, req.Msg.Id)
+	modpack.PublicDownload, _ = s.store.IsModpackPublicDownload(ctx, req.Msg.Id)
 
 	return connect.NewResponse(&v1.GetModpackResponse{
 		Modpack: modpack,
@@ -571,6 +575,10 @@ func (s *ModpackService) DeleteModpack(ctx context.Context, req *connect.Request
 		s.log.Error("Failed to delete modpack from database: %v", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete modpack"))
 	}
+	// Ids are never reused but a stale flag should not linger
+	if err := s.store.SetModpackPublicDownload(ctx, modpackID, false); err != nil {
+		s.log.Error("Failed to clear public download for %s: %v", modpackID, err)
+	}
 
 	s.log.Info("Successfully deleted modpack %s (%s)", modpack.Name, modpackID)
 	return connect.NewResponse(&v1.DeleteModpackResponse{
@@ -622,6 +630,7 @@ func (s *ModpackService) ListFavorites(ctx context.Context, req *connect.Request
 		fav.Modpack.IsFavorited = true
 		modpacks = append(modpacks, fav.Modpack)
 	}
+	s.markPublicDownloads(ctx, modpacks)
 
 	return connect.NewResponse(&v1.ListFavoritesResponse{
 		Modpacks: modpacks,

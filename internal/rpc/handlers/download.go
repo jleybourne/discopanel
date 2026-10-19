@@ -65,6 +65,15 @@ func NewDownloadStreamHandler(downloadManager *transfer.DownloadManager, log *lo
 			disposition = "attachment"
 		}
 		w.Header().Set("Content-Disposition", disposition)
+		// Names come from users, never let browsers sniff the bytes into a page
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		switch {
+		case session.ContentType != "":
+			w.Header().Set("Content-Type", session.ContentType)
+		case mime.TypeByExtension(filepath.Ext(session.Filename)) == "":
+			// Unknown extensions would otherwise be sniffed by ServeContent
+			w.Header().Set("Content-Type", "application/octet-stream")
+		}
 
 		// Handles range headers, conditional requests, and Content-Length
 		http.ServeContent(w, r, session.Filename, stat.ModTime(), file)
