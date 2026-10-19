@@ -95,6 +95,18 @@ func FindWorldDir(dataDir string) (string, error) {
 	return worldDir, nil
 }
 
+// Resolves <level-name>/datapacks and its disabled sibling, the world need not exist yet
+func DatapacksDirs(dataDir string) (enabled, disabled string, err error) {
+	rel := filepath.Join(worldName(dataDir), "datapacks")
+	if enabled, err = ResolveUnder(dataDir, rel); err != nil {
+		return "", "", fmt.Errorf("invalid level-name in %s: %w", dataDir, err)
+	}
+	if disabled, err = ResolveUnder(dataDir, rel+"_disabled"); err != nil {
+		return "", "", fmt.Errorf("invalid level-name in %s: %w", dataDir, err)
+	}
+	return enabled, disabled, nil
+}
+
 // Returns the world directory plus any sibling world dirs
 func FindWorldDirs(dataDir string) ([]string, error) {
 	worldDir, err := FindWorldDir(dataDir)

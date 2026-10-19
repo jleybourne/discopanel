@@ -57,6 +57,7 @@
 	import ServerSettings from '$lib/components/server-settings.svelte';
 	import ServerProperties from '$lib/components/server-properties.svelte';
 	import ServerMods from '$lib/components/server-mods.svelte';
+	import ServerDatapacks from '$lib/components/server-datapacks.svelte';
 	import ServerFiles from '$lib/components/files/server-files.svelte';
 	import ServerBackups from '$lib/components/server-backups.svelte';
 	import ServerRouting from '$lib/components/server-routing.svelte';
@@ -72,6 +73,7 @@
 		{ key: 'console', label: 'Console' },
 		{ key: 'files', label: 'Files' },
 		{ key: 'mods', label: 'Mods' },
+		{ key: 'datapacks', label: 'Datapacks' },
 		{ key: 'modules', label: 'Modules' },
 		{ key: 'tasks', label: 'Tasks' },
 		{ key: 'network', label: 'Network' },
@@ -80,7 +82,7 @@
 	type TabKey = (typeof TABS)[number]['key'];
 
 	// Tabs that manage their own height and inner scrolling
-	const FILL_TABS: TabKey[] = ['console', 'files', 'mods', 'properties', 'settings'];
+	const FILL_TABS: TabKey[] = ['console', 'files', 'mods', 'datapacks', 'properties', 'settings'];
 
 	let server = $state<Server | null>(null);
 	let loading = $state(true);
@@ -559,6 +561,8 @@
 					</div>
 				{:else if activeTab === 'mods'}
 					<ServerMods {server} active={true} />
+				{:else if activeTab === 'datapacks'}
+					<ServerDatapacks {server} active={true} />
 				{:else if activeTab === 'properties'}
 					<ServerProperties {server} onUpdate={loadServer} />
 				{:else if activeTab === 'settings'}
