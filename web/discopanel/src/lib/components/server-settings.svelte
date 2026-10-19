@@ -9,7 +9,7 @@
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Switch } from '$lib/components/ui/switch';
 	import { ServerAvatar } from '$lib/components/app';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { clone, create } from '@bufbuild/protobuf';
 	import { notify } from '$lib/stores/activity.svelte';
 	import { Loader2, Save, RotateCcw, Lock, Camera, CircleArrowUp } from '@lucide/svelte';
@@ -35,6 +35,7 @@
 	import DockerOverridesEditor from '$lib/components/docker-overrides-editor.svelte';
 	import { containerRoot, volumeSourceRoots } from '$lib/components/files/picker-roots';
 	import MemorySlider from '$lib/components/memory-slider.svelte';
+	import LoaderBuildSelect from '$lib/components/loader-build-select.svelte';
 	import { getUniqueDockerImages, encodeIconUpload } from '$lib/utils';
 
 	interface Props {
@@ -232,7 +233,47 @@
 		baseline = clone(UpdateServerRequestSchema, fresh);
 	}
 
-	let dirtyCount = $derived(FIELD_KEYS.filter((key) => fieldDirty(key)).length);
+	// Pinned loader build lives in the server properties
+	const BUILD_KEY = 'forgeVersion';
+	let buildPin = $state<string | null>(null); // Null when properties are unreadable
+	// Changing loader or MC version drops the pin server side
+	let runtimeChanged = $derived(
+		formData.modLoader !== baseline.modLoader || formData.mcVersion !== baseline.mcVersion
+	);
+	let expectedBuild = $derived(runtimeChanged ? '' : (buildPin ?? ''));
+	// Follows the expected pin until the user picks another build
+	let loaderBuild = $derived(expectedBuild);
+	let buildDirty = $derived(buildPin !== null && loaderBuild !== expectedBuild);
+	let showLoaderBuild = $derived(
+		buildPin !== null &&
+			!!formData.mcVersion &&
+			!!modLoaders.find((l) => l.loader === formData.modLoader)?.pinnableBuilds
+	);
+
+	async function loadBuildPin() {
+		try {
+			const res = await rpcClient.properties.getServerProperties(
+				{ serverId: server.id },
+				silentCallOptions
+			);
+			buildPin = findBuildPin(res.categories);
+		} catch {
+			// Without property access the picker stays hidden
+			buildPin = null;
+		}
+	}
+
+	function findBuildPin(categories: { properties: { key: string; value: string }[] }[]): string {
+		for (const cat of categories) {
+			const prop = cat.properties.find((p) => p.key === BUILD_KEY);
+			if (prop) return prop.value;
+		}
+		return '';
+	}
+
+	let dirtyCount = $derived(
+		FIELD_KEYS.filter((key) => fieldDirty(key)).length + (buildDirty ? 1 : 0)
+	);
 	let dirty = $derived(dirtyCount > 0);
 
 	guardUnsavedChanges(() => dirty && !saving);
@@ -262,7 +303,9 @@
 				baseline = clone(UpdateServerRequestSchema, buildFormData());
 				saving = false;
 				uploadedFavicon = '';
+				buildPin = null;
 				loadOptions();
+				loadBuildPin();
 				return;
 			}
 			rebaseOnServer();
@@ -271,6 +314,7 @@
 
 	onMount(() => {
 		loadOptions();
+		loadBuildPin();
 		checkUrlHash();
 		window.addEventListener('hashchange', checkUrlHash);
 		return () => window.removeEventListener('hashchange', checkUrlHash);
@@ -310,12 +354,27 @@
 		if (!dirty || saving) return;
 		saving = true;
 		try {
-			await rpcClient.server.updateServer(
-				create(UpdateServerRequestSchema, {
-					...formData,
-					clearAdditionalPorts: (formData.additionalPorts?.length ?? 0) === 0
-				})
-			);
+			const fieldsDirty = FIELD_KEYS.some((key) => fieldDirty(key));
+			const pinAfterUpdate = expectedBuild;
+			const build = loaderBuild;
+			if (fieldsDirty) {
+				await rpcClient.server.updateServer(
+					create(UpdateServerRequestSchema, {
+						...formData,
+						clearAdditionalPorts: (formData.additionalPorts?.length ?? 0) === 0
+					})
+				);
+			}
+			// Runs after the server update, which may have cleared the pin
+			if (buildPin !== null && build !== pinAfterUpdate) {
+				const res = await rpcClient.properties.updateServerProperties({
+					serverId: server.id,
+					updates: { [BUILD_KEY]: build }
+				});
+				buildPin = findBuildPin(res.categories);
+			} else if (fieldsDirty && runtimeChanged) {
+				buildPin = '';
+			}
 			notify.success(
 				stopped ? 'Settings saved' : 'Settings saved. Restart the server to apply changes.'
 			);
@@ -331,6 +390,7 @@
 	function reset() {
 		formData = buildFormData();
 		baseline = clone(UpdateServerRequestSchema, buildFormData());
+		loaderBuild = expectedBuild;
 	}
 
 	async function handleIconSelect(e: Event) {
@@ -590,6 +650,31 @@
 							</SelectContent>
 						</Select>
 					</div>
+
+					{#if showLoaderBuild}
+						<div id="panel-loaderBuild" class={ring('panel-loaderBuild')}>
+							<div class="mb-1.5 flex items-center gap-1.5">
+								<Label for="loader_build" class="text-xs font-medium text-muted-foreground">
+									Loader build
+								</Label>
+								{#if !stopped}
+									<span title="Stop the server to change">
+										<Lock class="size-3 text-muted-foreground/50" />
+									</span>
+								{/if}
+								{#if buildDirty}
+									<span class="size-1.5 rounded-full bg-status-busy" title="Unsaved change"></span>
+								{/if}
+							</div>
+							<LoaderBuildSelect
+								id="loader_build"
+								modLoader={formData.modLoader}
+								mcVersion={formData.mcVersion}
+								bind:value={loaderBuild}
+								disabled={loadingOptions || !stopped || saving}
+							/>
+						</div>
+					{/if}
 
 					<div id="panel-maxPlayers" class={ring('panel-maxPlayers')}>
 						{@render fieldLabel('maxPlayers', 'max_players', 'Max players')}

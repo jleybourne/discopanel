@@ -425,6 +425,16 @@ func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v
 	if msg.Name == "" || msg.McVersion == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("name and MC version are required"))
 	}
+	loaderVersion := strings.TrimSpace(msg.LoaderVersion)
+	if loaderVersion != "" {
+		// Packs decide their own loader build
+		if modpack != nil || !provisioner.SupportsLoaderBuilds(modLoader) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("a loader build can only be pinned for Forge, NeoForge, Fabric or Quilt servers"))
+		}
+		if !provisioner.ValidLoaderBuild(loaderVersion) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid loader build %q", loaderVersion))
+		}
+	}
 
 	// Handle proxy configuration
 	proxyHostnames, err := proxy.NormalizeHostnames(msg.ProxyHostnames)
@@ -609,6 +619,10 @@ func (s *ServerService) CreateServer(ctx context.Context, req *connect.Request[v
 	serverConfig := s.serverPropertiesOrDefault(ctx, server.Id)
 	if importedLevelName != "" {
 		serverConfig.Level = &importedLevelName
+	}
+
+	if loaderVersion != "" {
+		serverConfig.ForgeVersion = &loaderVersion
 	}
 
 	// Reflects heap sizing into read-only properties
@@ -811,6 +825,11 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 	}
 	netClaim.Confirm()
 
+	// Builds belong to one loader and MC version, a stale pin would fail
+	if server.ModLoader != originalModLoader || server.McVersion != originalMCVersion {
+		s.clearLoaderBuildPin(ctx, server.Id)
+	}
+
 	// Reconcile keeps routes matching the saved shape
 	syncRoutes(ctx, s.proxy, s.log, "after server update")
 
@@ -825,6 +844,18 @@ func (s *ServerService) UpdateServer(ctx context.Context, req *connect.Request[v
 	return connect.NewResponse(&v1.UpdateServerResponse{
 		Server: server.Redact(),
 	}), nil
+}
+
+// Drops a pinned loader build, the next install takes the recommended one
+func (s *ServerService) clearLoaderBuildPin(ctx context.Context, serverID string) {
+	serverConfig, err := s.store.GetServerProperties(ctx, serverID)
+	if err != nil || serverConfig.ForgeVersion == nil || *serverConfig.ForgeVersion == "" {
+		return
+	}
+	serverConfig.ForgeVersion = nil
+	if err := s.store.UpdateServerProperties(ctx, serverConfig); err != nil {
+		s.log.Error("Failed to clear pinned loader build: %v", err)
+	}
 }
 
 // Points server loader and properties at the selected modpack
