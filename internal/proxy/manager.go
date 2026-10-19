@@ -1295,7 +1295,8 @@ func offlineMOTD(cfg *v1.ServerProperties, wakeable bool) string {
 	if wakeable {
 		return SyntheticMOTD(cfg, "§7offline", "§ajoin to press play")
 	}
-	return SyntheticMOTD(cfg, "§7offline", "§7the server is paused")
+	// Paused reads as sleeping elsewhere, stopped servers say so plainly
+	return SyntheticMOTD(cfg, "§7offline", "§7the server is stopped")
 }
 
 // Builds the status lines shown while a server boots

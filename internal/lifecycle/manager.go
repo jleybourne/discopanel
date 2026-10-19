@@ -33,10 +33,15 @@ type PlayerCounter interface {
 	PlayersOnline(serverID string) (count int, known bool)
 }
 
+// Prepares server files ahead of a container start
+type provisionEnsurer interface {
+	Ensure(ctx context.Context, server *v1.Server, cfg *v1.ServerProperties) (*provisioner.Result, error)
+}
+
 type Manager struct {
 	store    *storage.Store
 	docker   *docker.Client
-	prov     *provisioner.Provisioner
+	prov     provisionEnsurer
 	sender   *command.Sender
 	proxy    *proxy.Manager
 	bus      *events.Bus
@@ -49,6 +54,8 @@ type Manager struct {
 	// Per-server transition gate rejects overlapping operations
 	startMu     sync.Mutex
 	transitions map[string]*slot
+	// Bumped on every claim so stale status reads can be discarded
+	epochs map[string]uint64
 
 	// Last requested stop source per server, cleared on start
 	stopIntentMu sync.Mutex
@@ -145,6 +152,10 @@ func (m *Manager) claimSlot(serverID, kind string) (*slot, error) {
 	abortCtx, abort := context.WithCancel(context.Background())
 	sl := &slot{kind: kind, abortCtx: abortCtx, abort: abort, done: make(chan struct{})}
 	m.transitions[serverID] = sl
+	if m.epochs == nil {
+		m.epochs = make(map[string]uint64)
+	}
+	m.epochs[serverID]++
 	return sl, nil
 }
 

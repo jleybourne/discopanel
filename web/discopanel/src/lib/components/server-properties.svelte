@@ -37,6 +37,15 @@
 	let stopped = $derived(server.status === ServerStatus.STOPPED);
 	let searching = $derived(searchQuery.trim().length > 0);
 
+	// Settings only the hostname proxy can act on
+	const PROXY_ONLY_KEYS = ['enableWakeOnConnect', 'enableOfflineStatus', 'enableAutopause'];
+	let proxied = $derived(server.proxyHostnames.length > 0);
+
+	function fieldWarning(prop: ServerProperty): string {
+		if (proxied || !PROXY_ONLY_KEYS.includes(prop.key)) return '';
+		return 'No effect yet: this server has no proxy hostname. Add one in the Network tab.';
+	}
+
 	// Reload from scratch when viewing a different server
 	let previousServerId = $state(server.id);
 	$effect(() => {
@@ -268,6 +277,7 @@
 										{prop}
 										locked={running}
 										highlighted={highlighted === prop.key}
+										warning={fieldWarning(prop)}
 										onCopyLink={copyFieldLink}
 									/>
 								{/each}

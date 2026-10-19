@@ -384,8 +384,15 @@ func main() {
 					if lifecycleManager.Busy(server.Id) {
 						continue
 					}
+					// Epoch taken first so a transition racing the read voids it
+					epoch := lifecycleManager.StatusEpoch(server.Id)
 					status, err := dockerClient.GetContainerStatus(ctx, server.ContainerId)
-					if err != nil || server.Status == status {
+					if err != nil {
+						continue
+					}
+					// Paused containers survive panel restarts, the wake gate must too
+					lifecycleManager.ObserveContainerStatus(server.Id, status, epoch)
+					if server.Status == status {
 						continue
 					}
 					// Write under the transition slot so a start/stop that

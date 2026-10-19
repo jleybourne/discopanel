@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strconv"
@@ -58,13 +59,17 @@ type SleepingServer struct {
 	MaxPlayers int
 }
 
+// Start refused because another transition holds the server
+var ErrServerBusy = errors.New("server is busy with another transition")
+
 // Lets the proxy wake paused and stopped servers
 type ServerGate interface {
 	// Returns sleeping status data when the server is paused
 	SleepingInfo(serverID string) (*SleepingServer, bool)
 	// Resumes a paused server so a login can proceed
 	WakeServer(ctx context.Context, serverID string) error
-	// Begins an async cold start for wake logins
+	// Begins an async cold start for wake logins, nil when one is already
+	// running, ErrServerBusy while a stop or other transition holds it
 	StartServer(serverID string) error
 }
 

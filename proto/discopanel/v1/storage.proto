@@ -2877,7 +2877,7 @@ message ServerProperties {
   }];
   optional bool enable_autostop = 111 [(discopanel.options.v1.prop) = {
     default_value: "false"
-    desc: "Stop the server when idle"
+    desc: "Stop the server when idle; with Wake on Connect the next join starts it again"
     input: "checkbox"
     label: "Enable Auto-Stop"
     category: "autostop"
@@ -2898,14 +2898,14 @@ message ServerProperties {
   }];
   optional bool enable_wake_on_connect = 114 [(discopanel.options.v1.prop) = {
     default_value: "false"
-    desc: "Keep this server joinable while stopped; joining starts it up (proxied servers only)"
+    desc: "Keep this server in players' server lists while stopped and start it when someone joins. Needs a proxy hostname (Network tab). With the lobby on, players wait there and hop over once it is up; otherwise they are asked to rejoin in a minute. Also wakes auto-paused servers. Pair with Auto-Stop to put it back to sleep"
     input: "checkbox"
     label: "Wake on Connect"
     category: "proxy"
   }];
   optional bool enable_offline_status = 140 [(discopanel.options.v1.prop) = {
     default_value: "false"
-    desc: "Answer server list pings while stopped, showing the server icon and offline message"
+    desc: "Answer server list pings while stopped, showing the server icon and offline message (proxied servers only, always on with Wake on Connect)"
     input: "checkbox"
     label: "Show Offline Status"
     category: "proxy"
